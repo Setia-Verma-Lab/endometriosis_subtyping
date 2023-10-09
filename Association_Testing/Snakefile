@@ -1,0 +1,73 @@
+
+rule all:
+    input:
+        expand('{dataset}/{dataset}_{ancestry}/sample_list.txt', dataset=['PMBB', 'UKBB', 'eMERGE'], ancestry=['EUR', 'AFR', 'ASIAN'])
+
+rule set_up_dataset_cohorts:
+    output:
+        pheno='{dataset}/{dataset}_{ancestry}/saige_pheno_covars.txt',
+        samples='{dataset}/{dataset}_{ancestry}/sample_list.txt'
+    input:
+        master_pheno='../Feature_Extraction/cluster_phenotypes_multi_ancestry.csv'
+    run:
+        import pandas as pd
+
+        pheno = pd.read_csv(input.master_pheno, index_col='IID')
+        pheno = pheno[pheno['Dataset'] == wildcards.dataset]
+        pheno = pheno[pheno['ANCESTRY'] == wildcards.ancestry]
+        print(pheno)
+        print(pheno.columns)
+
+        pheno_cols = ['endometriosis']
+        pheno_cols.extend([c for c in pheno.columns if 'cluster' in c])
+
+        if wildcards.dataset != 'PMBB':
+            pheno.index = pheno.index.to_series().str.replace(wildcards.dataset, '')
+
+        pheno = pheno[~pheno.index.duplicated()]
+        print(pheno)
+
+        output_pheno = pheno[pheno_cols].copy()
+
+        col_map = {}
+        if wildcards.dataset == 'eMERGE':
+            output_pheno['site'] = output_pheno.index.to_series().str[:2]
+            output_pheno = output_pheno[output_pheno.site.isin(['74', '27', '52'])]
+            genetic_data_samples = pd.read_table('/project/ritchie/datasets/eMERGE/eMERGE_III_Imputed_UW/V2_wHarvard/eMERGE_Info_QC/subset.22.fam', header=None, dtype=str)[0]
+            print(output_pheno['site'].value_counts())
+            output_pheno['site_27'] = (output_pheno['site'] == '27').astype(int)
+            output_pheno['site_52'] = (output_pheno['site'] == '52').astype(int)
+            pc_file = '/project/ritchie01/datasets/eMERGE/eMERGE_III_Imputed_UW/V2_wHarvard/R-squared_summary_and_accessory_files/chr1-22.merged.maf.05.LD_1000_50_.7_pruned.no_tri.plink.pca-approx.eigenvec'
+            pc_file_index_col = 'IID'
+            need_cols = [pc_file_index_col]
+            need_cols.extend([f'PC{i+1}' for i in range(10)])
+        elif wildcards.dataset == 'PMBB':
+            pc_file = '/project/PMBB/PMBB-Release-2020-2.0/Genotype/PCA/PMBB-Release-2020-2.0_genetic_genotype.eigenvec'
+            genetic_data_samples = pd.read_table('/project/ritchie02/projects/gwPheWAS/PMBB-Release-2020-2.0_genetic_imputed-topmed-r2_bgen.sample', dtype=str)['ID_1']
+            pc_file_index_col = 'PMBB_ID'
+            need_cols = [pc_file_index_col]
+            need_cols.extend([f'PC{i+1}' for i in range(10)])
+        elif wildcards.dataset == 'UKBB':
+            for i in range(1, 10):
+                col_map['f.22009.0.' + str(i)] = 'PC' + str(i)
+            pc_file = '/project/ritchie01/datasets/UKBiobank/phenotype/ukb43665/ukb43665.tab'
+            genetic_data_samples = pd.read_table('/project/ritchie/datasets/UKBiobank/ukb_genotype_fam/imputed/ukb32133_imp_chr22_v3_s487324.sample', dtype=str, sep=' ')['ID_1']
+            pc_file_index_col = 'f.eid'
+            need_cols = [pc_file_index_col]
+            need_cols.extend(col_map.keys())
+
+        print(len(output_pheno))
+        output_pheno = output_pheno.loc[output_pheno.index.intersection(genetic_data_samples)]
+        print(len(output_pheno), 'after dropping samples not in the genetic data files we need')
+        print(output_pheno[pheno_cols].apply(lambda x: x.value_counts()).transpose())
+
+        pc_df = pd.read_table(pc_file, index_col=pc_file_index_col, dtype={pc_file_index_col: str}, usecols=need_cols)
+        pc_df = pc_df.rename(columns=col_map)
+        pc_df = pc_df.loc[pc_df.index.intersection(output_pheno.index)]
+
+        output_pheno = pd.concat([output_pheno, pc_df], axis=1)
+        output_pheno.index.name = 'IID'
+
+        print(output_pheno)
+        output_pheno.to_csv(output.pheno, sep='\t')
+        open(output.samples, 'w+').write('\n'.join(output_pheno.index))

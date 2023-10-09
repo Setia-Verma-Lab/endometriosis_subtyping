@@ -1,0 +1,175 @@
+configfile: 'extraction.yaml'
+
+locus_window = 5E4
+locus_chr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 19]
+
+rule all:
+    input:
+        'Merged/endo_loci.eMERGE.lifted_b38.bim',
+        'Merged/endo_loci.UKBB.lifted_b38.bim',
+        'Merged/endo_loci.PMBB.b38.bim'
+
+rule make_signal_bed:
+    output:
+        bed='Rahmioglu_loci_b37.bed'
+    input:
+        signals='Rahmioglu_processed_signals.csv'
+    run:
+        import pandas as pd
+
+        df = pd.read_csv(input.signals)
+        df = df.rename(columns={'Lead SNP': 'RSID', 'Position (hg19)': 'POS'})
+        df['START'] = df['POS'] - locus_window
+        df['END'] = df['POS'] + locus_window
+        df[['START', 'END']] = df[['START', 'END']].astype(int)
+        df['chrCHR'] = 'chr' + df['Chr'].astype(str)
+        df = df[['chrCHR', 'START', 'END', 'RSID']]
+
+        print(df)
+        df.to_csv(output.bed, sep='\t', header=False, index=False)
+
+rule liftover_b37_bed:
+    output:
+        b38='Rahmioglu_loci_b38.bed',
+        failed='Rahmioglu_loci_liftover.failed'
+    input:
+        b37='Rahmioglu_loci_b37.bed',
+        chain='/project/ritchie/datasets/ucsc-chainfiles/hg19ToHg38.over.chain.gz'
+    envmodules: 'liftOver/20180423'
+    shell:
+        """
+        liftOver -bedPlus=4 -tab {input.b37} {input.chain} {output.b38} {output.failed}
+        """
+
+rule extract_chr_plink:
+    output:
+        expand('Extracted/{{dataset}}.{{chr}}.b{{build}}{ext}', ext=('.bed', '.bim', '.fam'))
+    input:
+        plink_set=lambda wildcards: expand(config['datasets'][wildcards.dataset]['plink_prefix'] + wildcards.chr + '{ext}', ext=config['datasets'][wildcards.dataset]['plink_ext']),
+        extract_file='Rahmioglu_loci_b{build}.bed'
+    params:
+        plink_prefix=lambda wildcards: config['datasets'][wildcards.dataset]['plink_prefix'] + wildcards.chr,
+        output_prefix='Extracted/{dataset}.{chr}.b{build}',
+        plink_flag=lambda wildcards: config['datasets'][wildcards.dataset]['plink_flag'],
+        extra_filter=lambda wildcards: '' if wildcards.dataset != 'PMBB' else '--extract-if-info R2 ">=" 0.4'
+    envmodules: 'plink/2.0-20210505'
+    shell:
+        """
+        plink --make-bed \
+          {params.plink_flag} {params.plink_prefix} \
+          --extract range {input.extract_file} \
+          {params.extra_filter} \
+          --out {params.output_prefix}
+        """
+
+rule merge_plink:
+    output:
+        expand('Merged/endo_loci.{{dataset}}.b{{build}}{ext}', ext=['.bed', '.bim', '.fam'])
+    input:
+        expand('Extracted/{{dataset}}.{chr}.b{{build}}{ext}', chr=locus_chr, ext=['.bed', '.bim', '.fam'])
+    params:
+        merge_list='Merged/{dataset}.b{build}.merge_list.txt',
+        output_prefix='Merged/endo_loci.{dataset}.b{build}'
+    envmodules: 'plink/1.90Beta6.18'
+    shell:
+        """
+        ls {input} | grep '.bim' | sed 's|.bim||g' > {params.merge_list}
+        
+        plink --merge-list {params.merge_list} \
+          --out {params.output_prefix}
+        """
+
+rule lift_merged_b37_to_b38:
+    output:
+        lifted='Merged/endo_loci.{dataset}.liftover_output.txt',
+        failed='Merged/endo_loci.{dataset}.liftover_failed.txt'
+    input:
+        b37='Merged/endo_loci.{dataset}.b37.bim',
+        chain='/project/ritchie/datasets/ucsc-chainfiles/hg19ToHg38.over.chain.gz'
+    params:
+        temp_input='Merged/endo_loci.{dataset}'
+    envmodules: 'liftOver/20180423'
+    shell:
+        """
+        awk '{{print "chr"$1,$4,$4+1,$2}}' {input.b37} > {params.temp_input}
+        head {params.temp_input}
+        liftOver -bedPlus=4 {params.temp_input} {input.chain} {output.lifted} {output.failed}
+        head {output.lifted}
+        rm {params.temp_input}
+        """
+
+rule make_lifted_38_plinkset:
+    output:
+        bim='Merged/endo_loci.{dataset}.lifted_b38.bim',
+        bed='Merged/endo_loci.{dataset}.lifted_b38.bed',
+        fam='Merged/endo_loci.{dataset}.lifted_b38.fam',
+    input:
+        bim='Merged/endo_loci.{dataset}.b37.bim',
+        bed='Merged/endo_loci.{dataset}.b37.bed',
+        fam='Merged/endo_loci.{dataset}.b37.fam',
+        lo_output='Merged/endo_loci.{dataset}.liftover_output.txt',
+        pmbb_bim='Merged/endo_loci.PMBB.b38.bim'
+    run:
+        import pandas as pd
+        import numpy as np
+        import shutil
+
+        bim = pd.read_table(input.bim, header=None, index_col=1)
+        liftover = pd.read_table(input.lo_output, header=None, index_col=3)
+
+        print(bim)
+        print(liftover)
+
+        bim.loc[liftover.index, 3] = liftover[1].values
+
+        bim = bim.reset_index().set_index([0, 3, 5, 4])
+        print(bim)
+        pmbb_bim = pd.read_table(input.pmbb_bim, header=None, index_col=[0, 3, 5, 4])
+        pmbb_bim2 = pd.read_table(input.pmbb_bim, header=None, index_col=[0, 3, 4, 5])
+        print(pmbb_bim)
+        print(pmbb_bim2)
+
+        forward_match = bim.index.intersection(pmbb_bim.index)
+        backward_match = bim.index.intersection(pmbb_bim2.index)
+
+        print('Forward Allele Match:', len(forward_match))
+        print('Backward Allele Match:', len(backward_match))
+
+        bim.loc[forward_match, 1] = pmbb_bim.loc[forward_match, 1]
+        bim.loc[backward_match, 1] = pmbb_bim2.loc[backward_match, 1]
+
+        print(bim.loc[forward_match, 1])
+        print(bim.loc[backward_match, 1])
+
+        bim = bim.reset_index()[np.arange(6)]
+        print(bim)
+
+        bim.to_csv(output.bim, sep='\t', header=False, index=False)
+
+        shutil.copyfile(input.bed, output.bed)
+        shutil.copyfile(input.fam, output.fam)
+
+rule final_extract_list:
+    output:
+        'final_extract_PMBB_var_IDs.txt'
+    input:
+        'Merged/endo_loci.eMERGE.lifted_b38.bim',
+        'Merged/endo_loci.UKBB.lifted_b38.bim',
+        'Merged/endo_loci.PMBB.b38.bim'
+    run:
+        import pandas as pd
+
+        snp_sets = {}
+
+        for f in input:
+            snp_sets[f] = pd.read_table(f, header=None)[1].to_list()
+
+        snp_intersection = None
+        for k, v in snp_sets.items():
+            if snp_intersection is None:
+                snp_intersection = set(v)
+            else:
+                snp_intersection = snp_intersection & set(v)
+            print(len(snp_intersection))
+
+        open(str(output), 'w+').write('\n'.join(sorted(list(snp_intersection))))

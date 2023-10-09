@@ -1,0 +1,229 @@
+include: '/home/guarelin/snakemake_workflows/basic_phenotyping/Snakefile'
+
+rule all:
+    input:
+        'cluster_phenotypes_multi_ancestry.csv',
+        '../Manuscript_Tables/table_1_numbers.csv'
+
+rule get_filtered_ibd_pmbb_file:
+    output:
+        'pmbb_relatedness_gt_0.2_ibd.genome'
+    input:
+        '/project/PMBB/PMBB-Release-2020-2.0/Imputed/Relatedness/PMBB-Release-2020-2.0_genetic_imputed-topmed-r2_ibd.genome'
+    shell:
+        """
+        awk '{{if ($10 >= 0.2) {{print $2,$4,$10}} }}' {input} > {output}
+        """
+
+rule make_cluster_phenotypes:
+    output:
+        results='cluster_phenotypes_multi_ancestry.csv'
+    input:
+        model='../Cluster_Training/Models/non_geno_PMBB_transfer_clusters.pickle',
+        pheno_files=expand('Pheno/{dataset}_pheno_covars.csv', dataset=['PMBB', 'eMERGE', 'UKBB']),
+        evec='/project/ritchie00/datasets/PMBB_eMERGE_UKBB_Combined/PEU_PCA/pca.eigenvec',
+        pmbb_relatedness='pmbb_relatedness_gt_0.2_ibd.genome',
+        emerge_relatedness='/project/ritchie/datasets/eMERGE/eMERGE_III_Imputed_UW/V2_wHarvard/R-squared_summary_and_accessory_files/ibd.Z0_lt_0.83.Z1_gt_0.1.3rd_degree.one_row_per_family',
+        ukbb_relatedness='/project/ritchie/datasets/UKBiobank/qc_files/ukb32133_rel_s488288.dat'
+    run:
+        import pandas as pd
+        import numpy as np
+        import pickle
+        import sys
+
+        model = pickle.load(open(input.model, 'rb'))
+        print(model)
+
+        need_cols = model.feature_names_in_
+
+        pmbb = pd.read_csv('Pheno/PMBB_pheno_covars.csv', index_col='PMBB_ID', nrows=None)
+        pmbb['Dataset'] = 'PMBB'
+
+        emerge = pd.read_csv('Pheno/eMERGE_pheno_covars.csv', index_col='SUBJID', dtype={'SUBJID': str}, nrows=None)
+        emerge.index = ['eMERGE' + i for i in emerge.index]
+        emerge['Dataset'] = 'eMERGE'
+
+        ukbb = pd.read_csv('Pheno/UKBB_pheno_covars.csv', index_col='f.eid', dtype={'f.eid': str}, nrows=None)
+        ukbb.index = ['UKBB' + i for i in ukbb.index]
+        ukbb['Dataset'] = 'UKBB'
+
+        pheno = pd.concat([pmbb, emerge, ukbb])
+        pheno.index.name = 'IID'
+        print(pheno)
+
+        evec = pd.read_table(input.evec, index_col='IID').drop(columns=['#FID'])
+        pheno = pd.concat([pheno, evec], axis=1)
+
+        pheno = pheno[pheno['SEX'] == 'Female']
+        pheno['ANCESTRY'] = pheno['ANCESTRY'].replace({'EAS': 'ASIAN', 'SAS': 'ASIAN'})
+        pheno = pheno[pheno['ANCESTRY'].isin(['EUR', 'AFR', 'ASIAN'])]
+        print(pheno)
+
+        print(pheno[need_cols])
+
+        features = pheno[pheno['endometriosis'] == 1][need_cols].copy()
+
+        clusters = pd.Series(index=features.index, data=model.predict(features))
+        print(clusters.value_counts())
+        print(pheno[['ANCESTRY', 'endometriosis']].value_counts().sort_index())
+
+        print(pd.crosstab(clusters, pheno['ANCESTRY']))
+
+        gwas_pheno = pheno[['Dataset', 'ANCESTRY', 'CURRENT_AGE', 'endometriosis']].copy()
+        controls = pheno.index[pheno['endometriosis'] == 0]
+
+        for i, subgroup in clusters.groupby(clusters):
+            gwas_pheno.loc[subgroup.index, 'cluster_vs_controls_' + str(i)] = 1
+            gwas_pheno.loc[controls, 'cluster_vs_controls_' + str(i)] = 0
+
+        print(gwas_pheno)
+        gwas_pheno['Related_to_Drop'] = 0
+
+        pmbb_relateds = pd.read_table(input.pmbb_relatedness, sep='\s+')
+        pmbb_relateds = pmbb_relateds[pmbb_relateds['IID1'].isin(gwas_pheno.index) & pmbb_relateds['IID2'].isin(gwas_pheno.index)]
+
+        np.random.seed(314159)
+
+        for _, row in pmbb_relateds.iterrows():
+            p1 = row['IID1']
+            p2 = row['IID2']
+            if gwas_pheno.loc[p1, 'Related_to_Drop'] == 1 or gwas_pheno.loc[p2, 'Related_to_Drop'] == 1:
+                # drop no one
+                continue
+            if gwas_pheno.loc[p1, 'endometriosis'] == 0 and gwas_pheno.loc[p2, 'endometriosis'] == 0:
+                # drop a random one of the pair, no one is a case
+                drop = np.random.choice([p1, p2], size=1)
+            elif gwas_pheno.loc[p1, 'endometriosis'] == 1 and gwas_pheno.loc[p2, 'endometriosis'] == 0:
+                drop = p2
+            elif gwas_pheno.loc[p1, 'endometriosis'] == 0 and gwas_pheno.loc[p2, 'endometriosis'] == 1:
+                drop = p1
+            else:
+                print('dropping a case')
+                drop = np.random.choice([p1, p2], size=1)
+            gwas_pheno.loc[drop, 'Related_to_Drop'] = 1
+
+        print(gwas_pheno[['endometriosis', 'Related_to_Drop']].value_counts())
+
+        ukbb_relateds = pd.read_table(input.ukbb_relatedness, sep='\s+')
+        ukbb_relateds = ukbb_relateds[ukbb_relateds['Kinship'] > 0.2]
+        ukbb_relateds['ID1'] = ['UKBB' + str(i) for i in ukbb_relateds['ID1']]
+        ukbb_relateds['ID2'] = ['UKBB' + str(i) for i in ukbb_relateds['ID2']]
+        ukbb_relateds = ukbb_relateds[ukbb_relateds['ID1'].isin(gwas_pheno.index) & ukbb_relateds['ID2'].isin(gwas_pheno.index)]
+        print(ukbb_relateds)
+
+        np.random.seed(314159)
+
+        for _, row in ukbb_relateds.iterrows():
+            p1 = row['ID1']
+            p2 = row['ID2']
+            if gwas_pheno.loc[p1, 'Related_to_Drop'] == 1 or gwas_pheno.loc[p2, 'Related_to_Drop'] == 1:
+                # drop no one
+                continue
+            if gwas_pheno.loc[p1, 'endometriosis'] == 0 and gwas_pheno.loc[p2, 'endometriosis'] == 0:
+                # drop a random one of the pair, no one is a case
+                drop = np.random.choice([p1, p2], size=1)
+            elif gwas_pheno.loc[p1, 'endometriosis'] == 1 and gwas_pheno.loc[p2, 'endometriosis'] == 0:
+                drop = p2
+            elif gwas_pheno.loc[p1, 'endometriosis'] == 0 and gwas_pheno.loc[p2, 'endometriosis'] == 1:
+                drop = p1
+            else:
+                print('dropping a case')
+                drop = np.random.choice([p1, p2], size=1)
+            gwas_pheno.loc[drop, 'Related_to_Drop'] = 1
+
+        print(gwas_pheno[['endometriosis', 'Related_to_Drop']].value_counts())
+
+        for line in open(input.emerge_relatedness).read().splitlines():
+            family = line.split()[1:]
+            family = ['eMERGE' + f for f in family if 'eMERGE' + f in gwas_pheno.index]
+
+            if len(family) < 2:
+                continue
+
+            family_pheno = gwas_pheno.loc[family]
+            num_cases = (family_pheno['endometriosis'] == 1).sum()
+            if num_cases == 0:
+                # no cases
+                keep = np.random.choice(family, size=1)
+                drop = [f for f in family if f != keep]
+            elif num_cases == 1:
+                # one case
+                drop = [f for f in family if family_pheno.loc[f, 'endometriosis'] != 1]
+            else:
+                # more than one case
+                print('dropping one or more cases')
+                keep = np.random.choice(family_pheno.index[family_pheno['endometriosis'] == 1], size=1)
+                drop = [f for f in family if f != keep]
+
+            gwas_pheno.loc[drop, 'Related_to_Drop'] = 1
+
+        print(gwas_pheno[['endometriosis', 'Related_to_Drop']].value_counts())
+
+        gwas_pheno = pd.concat([gwas_pheno, evec.reindex(gwas_pheno.index)], axis=1)
+
+        gwas_pheno.to_csv(output.results)
+
+rule make_table_1_info:
+    output:
+        data='../Manuscript_Tables/table_1_numbers.csv'
+    input:
+        pmbb='Pheno/PMBB_pheno_covars.csv',
+        full_pmbb='../Cluster_Training/Pheno/FULL_PMBB_pheno_covars.csv',
+        emerge='Pheno/eMERGE_pheno_covars.csv',
+        ukbb='Pheno/UKBB_pheno_covars.csv',
+        clustering_pheno='../Cluster_Training/Data/non_genotyped_PMBB_data_for_no_snps_clustering.csv',
+        geno_pmbb_fam='/project/PMBB/PMBB-Release-2020-2.0/Genotype/PMBB-Release-2020-2.0_genetic_genotype.fam'
+    run:
+        import pandas as pd
+        import sys
+
+        ukbb = pd.read_csv(input.ukbb,index_col='f.eid')
+        ukbb['CURRENT_AGE'] = ukbb['AGE']
+
+        # outliers = ['PMBB5722341073505', 'PMBB5894725453370', 'PMBB6992295714524', 'PMBB5746993427018', 'PMBB6404034341995']
+        outliers = []
+        pmbb_clusters = pd.read_csv(input.clustering_pheno,index_col='IID')
+
+        pmbb_fam = pd.read_table(input.geno_pmbb_fam,header=None, names=['FID', 'IID', 0, 1, 2, 3], sep=' ', index_col='IID')
+
+        pmbb = pd.read_csv(input.pmbb,index_col='PMBB_ID')
+        pmbb = pmbb[pmbb.index.isin(pmbb_fam.index)]
+        print('Genotyped Case/Control')
+        print(pmbb['endometriosis'].value_counts())
+
+        full_pmbb = pd.read_csv(input.full_pmbb,index_col='PMBB_ID')
+        full_pmbb = full_pmbb[~full_pmbb.index.isin(outliers)]
+        full_pmbb = full_pmbb[(~full_pmbb.index.isin(pmbb.index)) | (full_pmbb.index.isin(pmbb_clusters.index))]
+        full_pmbb = full_pmbb[~(~full_pmbb.index.isin(pmbb_clusters.index) & (full_pmbb['endometriosis'] == 1))]
+
+        emerge = pd.read_csv(input.emerge,index_col='SUBJID')
+        emerge['site'] = emerge.index.to_series().astype(str).str[:2]
+        print(pd.crosstab(emerge[emerge['endometriosis'] == 1]['site'],emerge['ANCESTRY']))
+        print(emerge)
+        emerge = emerge[emerge.site.isin(['27', '52', '68'])]
+        print(emerge)
+
+        numbers = pd.DataFrame(index=['NG-PMBB', 'G-PMBB', 'eMERGE', 'UKBB'],columns=['Total', 'Women', 'Cases', 'Controls',
+                                                                                      'dx_AGE_cases', 'dx_AGE_std_cases',
+                                                                                      'cu_AGE_cases', 'cu_AGE_std_cases',
+                                                                                      'cu_AGE_controls', 'cu_AGE_std_controls'])
+
+        for name, df in zip(numbers.index, [full_pmbb, pmbb, emerge, ukbb]):
+            numbers.loc[name, 'Total'] = len(df)
+            women = df[df['SEX'] == 'Female'].copy()
+            numbers.loc[name, 'Women'] = len(women)
+
+            numbers.loc[name, ['Cases', 'Controls']] = women['endometriosis'].value_counts().loc[[1, 0]].values
+
+            if 'AGE_endometriosis' in df.columns:
+                numbers.loc[name, ['dx_AGE_cases']] = women.groupby('endometriosis')['AGE_endometriosis'].mean().loc[
+                    [1]].values
+                numbers.loc[name, ['dx_AGE_std_cases']] = women.groupby('endometriosis')['AGE_endometriosis'].std().loc[
+                    [1]].values
+
+            numbers.loc[name, ['cu_AGE_cases', 'cu_AGE_controls']] = women.groupby('endometriosis')['CURRENT_AGE'].mean().loc[[1, 0]].values
+            numbers.loc[name, ['cu_AGE_std_cases', 'cu_AGE_std_controls']] = women.groupby('endometriosis')['CURRENT_AGE'].std().loc[[1, 0]].values
+
+        print(numbers)
+        numbers.index.name = 'Dataset'
+        numbers.to_csv(output.data)

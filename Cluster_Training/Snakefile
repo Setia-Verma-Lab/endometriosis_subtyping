@@ -1,0 +1,1147 @@
+include: "/home/guarelin/snakemake_workflows/basic_phenotyping/Snakefile"
+
+import pandas as pd
+TOTAL_TSNE_TRIALS = 1000
+N_LIST = [5, 10, 20, 50, 100, 200, 500, 1000]
+
+rule all:
+    input:
+        'Plots/no_snps_dist_mtx_random_50_stability.png',
+        'Plots/no_snps_dist_mtx_random_200_stability.png',
+        'Plots/no_snps_dist_mtx_stability.png',
+        'Pheno/PMBB_all_cleaned_phenos.csv',
+        'Data/merged_k_tests_long.csv'
+
+def get_confirmed_cases_controls(icd_long_data, procedure_long_data, min_diff=-30/365.25, max_diff=60/365.25):
+    import numpy as np
+
+    had_procedure = set(procedure_long_data['PMBB_ID'])
+    had_dx = set(icd_long_data['PMBB_ID'])
+    lap_and_endo = had_procedure & had_dx
+
+    confirmed_cases = []
+    confirmed_controls = [i for i in had_procedure if i not in lap_and_endo]
+    confirmed_controls_3 = [i for i in had_procedure if i not in lap_and_endo]
+    exclude = []
+    exclude_3 = []
+
+    for person in lap_and_endo:
+        procedures = procedure_long_data[procedure_long_data['PMBB_ID'] == person].copy()
+        endo_dx = icd_long_data[icd_long_data['PMBB_ID'] == person].copy()
+        comp_shape = (len(procedures), len(endo_dx))
+        comp_shape_T = (len(endo_dx), len(procedures))
+
+        dx_arr = np.broadcast_to(endo_dx['AGE_AT_EVENT'], comp_shape)
+        proc_arr = np.broadcast_to(procedures['AGE_AT_EVENT'], comp_shape_T).T
+        diff = (dx_arr - proc_arr)
+
+        if np.any(np.logical_and(min_diff <= diff, diff <= max_diff)): # At least one dx code within time window
+            confirmed_cases.append(person)
+        else:
+            exclude.append(person)
+            if np.all(np.logical_or(diff < min_diff, max_diff > min_diff)): # All dx codes occur outside of time window
+                confirmed_controls_3.append(person)
+            else:
+                # exclude_3.append(person)
+                if np.sum(np.max(diff >= max_diff, axis=0)) >= 2:
+                    exclude_3.append(person)
+
+    print(len(confirmed_cases), len(confirmed_controls), len(exclude), len(confirmed_controls_3), len(exclude_3))
+    return confirmed_cases, confirmed_controls, exclude, confirmed_controls_3, exclude_3
+
+def add_cc1_cc2_phenotype(cases, controls, exclusions, controls3, exclude3, pheno_desc, all_ids):
+    import numpy as np
+
+    cc1_col = 'CC1_' + pheno_desc
+    cc2_col = 'CC2_' + pheno_desc
+    cc3_col = 'CC3_' + pheno_desc
+
+    pheno = pd.DataFrame(index=all_ids, columns=[cc1_col, cc2_col, cc3_col])
+
+    pheno[cc1_col] = np.nan
+    pheno[cc2_col] = np.nan
+    pheno[cc3_col] = np.nan
+
+    pheno.loc[cases, cc1_col] = 1
+    pheno.loc[cases, cc2_col] = 1
+    pheno.loc[cases, cc3_col] = 1
+
+    pheno.loc[controls, cc1_col] = 0
+    pheno.loc[controls3, cc3_col] = 0
+
+    pheno.loc[exclude3, cc3_col] = 'NA -> 2+ Post-Surgery Dx'
+
+    pheno[cc2_col] = pheno[cc2_col].fillna(0)
+    pheno[cc2_col] = pheno[cc2_col].mask(pheno.index.isin(exclusions))
+
+    return pheno
+
+rule make_phenotypes:
+    output:
+        pheno='Pheno/PMBB_all_cleaned_phenos.csv'
+    input:
+        icd='Pheno/PMBB_pheno_covars.csv',
+        icd_long='Pheno/PMBB_phenotypes_long.csv',
+        cpt='Pheno/PMBB_procedures.csv',
+        cpt_long='Pheno/PMBB_procedures_long.csv'
+    resources: mem_mb=20000
+    run:
+        import pandas as pd
+        import numpy as np
+        import matplotlib.pyplot as plt
+        import sys
+
+        rep_age_min = 15
+        rep_age_max = 50
+
+        df = pd.read_csv(input.icd, index_col='PMBB_ID')
+        df = df[df['SEX'] == 'Female']
+        df = df.dropna(subset=['ENROLLMENT_AGE'])
+
+        print(df['not_uterine_endometriosis_icd'].value_counts())
+        print(df['endometriosis_icd'].value_counts())
+
+        cpt = pd.read_csv(input.cpt, index_col='PMBB_ID')
+        cpt = cpt[cpt.index.isin(df.index)]
+        print(cpt['atlas_laproscopy'].value_counts())
+        print(cpt['atlas_ultrasound_laproscopy'].value_counts())
+
+        cpt_long = pd.read_csv(input.cpt_long, parse_dates=['ENC_DATE_SHIFT'])
+        cpt_long = cpt_long[cpt_long['PMBB_ID'].isin(df.index)]
+        print(cpt_long)
+        print(cpt_long['CPT_PROCEDURE'].value_counts())
+
+        FULL_PMBB_COVAR = pd.read_table('/project/PMBB/PMBB-Release-2020-2.0/Phenotype/2.2/PMBB-Release-2020-2.2_phenotype_covariates.txt', index_col='PMBB_ID', parse_dates=['Birth_date_SHIFT'])
+        print(FULL_PMBB_COVAR)
+
+        cpt_long['AGE_AT_EVENT'] = (cpt_long['ENC_DATE_SHIFT'].values - FULL_PMBB_COVAR.loc[cpt_long['PMBB_ID'], 'Birth_date_SHIFT']).apply(lambda x: x.days / 365.25).values
+
+        lap_cpt_long = cpt_long[cpt_long['CPT_PROCEDURE'].str.contains('atlas_laproscopy')].copy()
+        lap_us_cpt_long = cpt_long[cpt_long['CPT_PROCEDURE'].str.contains('atlas_ultrasound_laproscopy')].copy()
+
+        lap_cpt_long_RA = lap_cpt_long[lap_cpt_long['AGE_AT_EVENT'].between(rep_age_min, rep_age_max)]
+        lap_us_cpt_long_RA = lap_us_cpt_long[lap_us_cpt_long['AGE_AT_EVENT'].between(rep_age_min, rep_age_max)]
+
+        print(lap_cpt_long['AGE_AT_EVENT'].describe(), '\n')
+
+        icd_long = pd.read_csv(input.icd_long, parse_dates=['condition_start_date'])
+        icd_long = icd_long[icd_long['PMBB_ID'].isin(df.index)]
+        icd_long['AGE_AT_EVENT'] = (icd_long['condition_start_date'].values - FULL_PMBB_COVAR.loc[icd_long['PMBB_ID'], 'Birth_date_SHIFT']).apply(lambda x: x.days / 365.25).values
+
+        endo_icd_long = icd_long[(icd_long['ICD_CONDITIONS'].str.contains('endometriosis')) &
+                                 ~(icd_long['ICD_CONDITIONS'].str.contains(':uterine_endometriosis'))].copy()
+        endo_icd_long_RA = endo_icd_long[endo_icd_long['AGE_AT_EVENT'].between(rep_age_min, rep_age_max)]
+
+        endo_icd_long_with_uterine = icd_long[icd_long['ICD_CONDITIONS'].str[:13] == 'endometriosis'].copy()
+        endo_icd_long_RA_with_uterine = endo_icd_long_with_uterine[endo_icd_long_with_uterine['AGE_AT_EVENT'].between(rep_age_min, rep_age_max)]
+
+        pheno = pd.DataFrame(index=df.index)
+
+        endo_counts = endo_icd_long['PMBB_ID'].value_counts()
+        endo_with_uterine_counts = endo_icd_long_with_uterine['PMBB_ID'].value_counts()
+
+        pheno[['ICD_1', 'ICD_2', 'ICD_1_with_N80.0', 'ICD_2_with_N80.0']] = 0
+        pheno.loc[endo_counts.index, 'ICD_1'] = 1
+        pheno.loc[endo_counts[endo_counts > 1].index, 'ICD_2'] = 1
+        pheno.loc[endo_with_uterine_counts.index, 'ICD_1_with_N80.0'] = 1
+        pheno.loc[endo_with_uterine_counts[endo_with_uterine_counts > 1].index, 'ICD_2_with_N80.0'] = 1
+
+        cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long,lap_cpt_long)
+        new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'ALL',pheno.index)
+        pheno = pd.concat([pheno, new_pheno],axis=1)
+
+        cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long_RA,lap_cpt_long_RA)
+        new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'RA',pheno.index)
+        pheno = pd.concat([pheno, new_pheno],axis=1)
+
+        cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long_with_uterine,lap_cpt_long)
+        new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'ALL_with_N80.0',pheno.index)
+        pheno = pd.concat([pheno, new_pheno],axis=1)
+
+        cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long_RA_with_uterine,lap_cpt_long_RA)
+        new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'RA_with_N80.0',pheno.index)
+        pheno = pd.concat([pheno, new_pheno],axis=1)
+
+        cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long,lap_us_cpt_long)
+        new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'ALL_with_US',pheno.index)
+        pheno = pd.concat([pheno, new_pheno],axis=1)
+
+        cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long_RA,lap_us_cpt_long_RA)
+        new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'RA_with_US',pheno.index)
+        pheno = pd.concat([pheno, new_pheno],axis=1)
+
+        cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long_with_uterine,lap_us_cpt_long)
+        new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'ALL_with_N80.0_with_US',pheno.index)
+        pheno = pd.concat([pheno, new_pheno],axis=1)
+
+        cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long_RA_with_uterine,lap_us_cpt_long_RA)
+        new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'RA_with_N80.0_with_US',pheno.index)
+        pheno = pd.concat([pheno, new_pheno],axis=1)
+
+        print(df['not_uterine_endometriosis_icd'].value_counts())
+        print(df['endometriosis_icd'].value_counts())
+
+        print(pheno.fillna('NA').apply(lambda x: x.value_counts(), result_type='expand').fillna(0).astype(int).transpose(), '\n')
+        print(pheno[['CC1_ALL', 'CC1_RA', 'ICD_1', 'ICD_2']].fillna('NA').value_counts().sort_index())
+        print(pheno[['CC1_ALL_with_N80.0', 'CC1_RA_with_N80.0', 'ICD_1_with_N80.0', 'ICD_2_with_N80.0']].fillna('NA').value_counts().sort_index())
+        print(pheno[['CC1_ALL_with_N80.0_with_US', 'CC1_RA_with_N80.0_with_US', 'CC2_ALL_with_N80.0_with_US', 'CC2_RA_with_N80.0_with_US']].fillna('NA').value_counts().sort_index())
+
+        keep_cols = [c for c in df.columns if 'PC' not in c and ('age' not in c.lower() or c == 'miscarriage') and 'icd' not in c and 'Related' not in c]
+        print(keep_cols)
+
+        pheno[keep_cols] = df[keep_cols]
+        print(pheno)
+
+        pheno.to_csv(output.pheno)
+
+rule test_time_windows:
+    output:
+        pheno='Pheno/PMBB_time_window_phenos.csv'
+    input:
+        icd='Pheno/PMBB_pheno_covars.csv',
+        icd_long='Pheno/PMBB_phenotypes_long.csv',
+        cpt='Pheno/PMBB_procedures.csv',
+        cpt_long='Pheno/PMBB_procedures_long.csv'
+    resources: mem_mb=20000
+    run:
+        import pandas as pd
+        import numpy as np
+        import matplotlib.pyplot as plt
+        import sys
+
+        rep_age_min = 15
+        rep_age_max = 50
+
+        df = pd.read_csv(input.icd, index_col='PMBB_ID')
+        df = df[df['SEX'] == 'Female']
+        df = df.dropna(subset=['ENROLLMENT_AGE'])
+
+
+        cpt = pd.read_csv(input.cpt, index_col='PMBB_ID')
+        cpt = cpt[cpt.index.isin(df.index)]
+
+        cpt_long = pd.read_csv(input.cpt_long, parse_dates=['ENC_DATE_SHIFT'])
+        cpt_long = cpt_long[cpt_long['PMBB_ID'].isin(df.index)]
+
+        FULL_PMBB_COVAR = pd.read_table('/project/PMBB/PMBB-Release-2020-2.0/Phenotype/2.2/PMBB-Release-2020-2.2_phenotype_covariates.txt', index_col='PMBB_ID', parse_dates=['Birth_date_SHIFT'])
+
+        cpt_long['AGE_AT_EVENT'] = (cpt_long['ENC_DATE_SHIFT'].values - FULL_PMBB_COVAR.loc[cpt_long['PMBB_ID'], 'Birth_date_SHIFT']).apply(lambda x: x.days / 365.25).values
+
+        lap_cpt_long = cpt_long[cpt_long['CPT_PROCEDURE'].str.contains('atlas_laproscopy')].copy()
+        lap_us_cpt_long = cpt_long[cpt_long['CPT_PROCEDURE'].str.contains('atlas_ultrasound_laproscopy')].copy()
+
+        lap_cpt_long_RA = lap_cpt_long[lap_cpt_long['AGE_AT_EVENT'].between(rep_age_min, rep_age_max)]
+        lap_us_cpt_long_RA = lap_us_cpt_long[lap_us_cpt_long['AGE_AT_EVENT'].between(rep_age_min, rep_age_max)]
+
+        icd_long = pd.read_csv(input.icd_long, parse_dates=['condition_start_date'])
+        icd_long = icd_long[icd_long['PMBB_ID'].isin(df.index)]
+        icd_long['AGE_AT_EVENT'] = (icd_long['condition_start_date'].values - FULL_PMBB_COVAR.loc[icd_long['PMBB_ID'], 'Birth_date_SHIFT']).apply(lambda x: x.days / 365.25).values
+
+        endo_icd_long_with_uterine = icd_long[icd_long['ICD_CONDITIONS'].str[:13] == 'endometriosis'].copy()
+        pheno = pd.DataFrame(index=df.index)
+
+        endo_with_uterine_counts = endo_icd_long_with_uterine['PMBB_ID'].value_counts()
+
+        pheno[['ICD_1_with_N80.0']] = 0
+        pheno.loc[endo_with_uterine_counts.index, 'ICD_1_with_N80.0'] = 1
+
+        for min_diff in [-0.5, -0.25, -0.16, -0.08, 0]:
+            for max_diff in [0.08, 0.16, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 5]:
+                cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long_with_uterine,lap_cpt_long,min_diff=min_diff,max_diff=max_diff)
+                new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'surg_conf_' + str(min_diff) + '_' + str(max_diff),pheno.index)
+                pheno = pd.concat([pheno, new_pheno],axis=1)
+
+                cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long_with_uterine,lap_us_cpt_long,min_diff=min_diff,max_diff=max_diff)
+                new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'proc_conf_' + str(min_diff) + '_' + str(max_diff),pheno.index)
+                pheno = pd.concat([pheno, new_pheno],axis=1)
+
+        print(pheno.fillna('NA').apply(lambda x: x.value_counts(), result_type='expand').fillna(0).astype(int).transpose(), '\n')
+
+        keep_cols = [c for c in df.columns if 'PC' not in c and ('age' not in c.lower() or c == 'miscarriage') and 'icd' not in c and 'Related' not in c]
+        print(keep_cols)
+
+        pheno[keep_cols] = df[keep_cols]
+        print(pheno)
+
+        pheno.to_csv(output.pheno)
+
+def get_all_icd_codes2(ukbb=False):
+    all_icd = []
+
+    for pheno in config['pheno_defs']:
+        for icd_key in ['icd10_cases', 'icd10_exclude', 'icd9_cases', 'icd9_exclude']:
+            if icd_key in config['pheno_defs'][pheno].keys():
+                all_icd.extend(config['pheno_defs'][pheno][icd_key])
+
+    if not ukbb:
+        all_icd_re = [code.replace('.', '\.').replace('*', '.') for code in all_icd]
+    else:
+        all_icd_re = [code.replace('.', '').replace('*', '.') for code in all_icd]
+
+    return all_icd, all_icd_re
+
+def shorten_codes_long2(long_df, code_regex, code_col, np, original_codes):
+
+    code_map = {}
+
+    shortened_search_table = long_df.copy()
+    first_char = list(set([code[:2] for code in code_regex]))
+
+    shortened_search_table = shortened_search_table[shortened_search_table[code_col].str[:2].isin(first_char)]
+    mask = np.zeros(len(shortened_search_table)).astype(bool)
+
+    print(code_col, end=': ', flush=True)
+    for i, code in enumerate(code_regex):
+        print(code, end=' ', flush=True)
+        match = shortened_search_table[code_col].str.match(code).fillna(False).values
+        code_map[original_codes[i]] = sorted(list(shortened_search_table.loc[match][code_col].unique()))
+
+        mask = mask | match
+
+    print('')
+    return shortened_search_table[mask], code_map
+
+def add_phenos_from_matrix2(pheno_def, big_matrix, code_map, pheno_df, np, count_matrix):
+    new_cols = []
+
+    for pheno in config['pheno_defs']:
+        pheno_col = pheno + '_' + pheno_def
+
+        if pheno_def + '_cases' in config['pheno_defs'][pheno].keys():
+            print(pheno_col)
+            new_col = pd.Series(data=0, index=pheno_df.index, name=pheno_col)
+            new_age_col = pd.Series(data=np.nan, index=pheno_df.index, name=pheno_col + '_age@dx')
+
+            pheno_codes = []
+            for code in config['pheno_defs'][pheno][pheno_def + '_cases']:
+                pheno_codes.extend(code_map[code])
+            pheno_matrix = big_matrix[pheno_codes].dropna(how='all')
+            age_at_dx = pheno_matrix.min(axis=1)
+            age_at_dx = age_at_dx.mask(age_at_dx > 100)
+
+            new_age_col.loc[age_at_dx.index] = age_at_dx
+            new_col.loc[age_at_dx.index] = 1
+
+            if pheno_def + '_exclude' in config['pheno_defs'][pheno].keys():
+                exclude_codes = []
+                for code in config['pheno_defs'][pheno][pheno_def + '_exclude']:
+                    exclude_codes.extend(code_map[code])
+                exclude_matrix = big_matrix[exclude_codes].dropna(how='all')
+                new_age_col.loc[exclude_matrix.index] = np.nan
+                new_col.loc[exclude_matrix.index] = np.nan
+
+            new_cols.append(new_col)
+            new_cols.append(new_age_col)
+
+    concat_cols = [pheno_df]
+    concat_cols.extend(new_cols)
+    pheno_df = pd.concat(concat_cols, axis=1)
+
+    return pheno_df
+
+def add_union_phenos2(pheno_df, np):
+    all_pheno_cols = []
+    for pheno in config['pheno_defs']:
+        pheno_cols = [c for c in pheno_df.columns if c in [pheno + '_icd9', pheno + '_icd10']]
+        all_pheno_cols.extend(pheno_cols)
+        pheno_df[pheno] = pheno_df[pheno_cols].sum(axis=1,skipna=False)
+        pheno_df.loc[pheno_df[pheno] > 1, pheno] = 1
+
+        pheno_age_cols = [c for c in pheno_df.columns if c in [pheno + '_icd9_age@dx', pheno + '_icd10_age@dx']]
+        pheno_df[pheno + '_age@dx'] = pheno_df[pheno_age_cols].min(axis=1, skipna=True)
+        pheno_df.loc[pheno_df[pheno] != 1, pheno + '_age@dx'] = np.nan
+
+        all_pheno_cols.append(pheno + '_icd')
+
+        icd_cols = [c for c in pheno_df.columns if c in [pheno + '_icd9', pheno + '_icd10']]
+        pheno_df[pheno + '_icd'] = pheno_df[icd_cols].sum(axis=1,skipna=False)
+        pheno_df.loc[pheno_df[pheno + '_icd'] > 1, pheno + '_icd'] = 1
+
+        icd_age_cols = [c for c in pheno_df.columns if c in [pheno + '_icd9_age@dx', pheno + '_icd10_age@dx']]
+        pheno_df[pheno + '_icd_age@dx'] = pheno_df[icd_age_cols].min(axis=1,skipna=True)
+        pheno_df.loc[pheno_df[pheno + '_icd'] != 1, pheno + '_icd_age@dx'] = np.nan
+
+        all_pheno_cols.append(pheno)
+    return sorted(all_pheno_cols)
+
+FULL_PMBB_COVAR = 'Pheno/PMBB_040323_demographics_clean.csv'
+FULL_PMBB_SNOMED = 'Pheno/PMBB_022023_OMOP_conditions.rpt'
+SNOMED_ICD_MAP = '/project/ssverma_shared/datasets/Ontology_Things/ICD_map_SNOMED.txt'
+FULL_PMBB_PROCEDURES = 'Pheno/PMBB_022023_OMOP_procedures.rpt'
+PMBB_ENROLLMENT_AGE = 'Pheno/PMBB_060523_first_consent_clean.csv'
+
+CURRENT_YEAR = 2021
+
+rule make_full_PMBB_phenotypes:
+    output:
+        pheno_table='Pheno/FULL_PMBB_pheno_covars.csv',
+        maps=expand('Pheno/FULL_PMBB_{type}.json',type=['ICD_codes']),
+        pheno_table_long='Pheno/FULL_PMBB_phenotypes_long.csv'
+    params:
+        config['pheno_defs'],
+        config['keep_covars']
+    resources: mem_mb=12000
+    run:
+        import pandas as pd
+        import numpy as np
+        from datetime import datetime
+        import json
+        import sys
+
+        print('Start')
+
+        # PMBB = pd.read_table(PMBB_COVAR, index_col='PMBB_ID', parse_dates=['Birth_date_SHIFT'])
+        PMBB = pd.read_csv(FULL_PMBB_COVAR, index_col='PMBB_ID')
+
+        age = pd.read_csv(PMBB_ENROLLMENT_AGE, index_col='PMBB_ID', parse_dates=['birth_date_shift'])
+        age = age.rename(columns={'consent_age': 'Age_at_Enrollment'})
+        PMBB['Age_at_Enrollment'] = age['Age_at_Enrollment']
+        # PMBB = PMBB.dropna(subset=['Age_at_Enrollment'])
+        PMBB['Birth_date_SHIFT'] = age['birth_date_shift']
+
+        PMBB['CURRENT_AGE'] = (datetime(2022, 6, 1) - PMBB['Birth_date_SHIFT']).dt.days / 365.25
+
+        print(PMBB)
+
+        all_icd, all_icd_re = get_all_icd_codes2()
+
+        SNOMED = pd.read_table(FULL_PMBB_SNOMED, nrows=None, dtype={'SNOMED':str}, parse_dates=['start_date_shift'])
+        SNOMED = SNOMED[SNOMED['PMBB_ID'].isin(PMBB.index)]
+        print(SNOMED)
+        print(SNOMED.columns)
+
+        snomed_icd = pd.read_table(SNOMED_ICD_MAP, header=None, dtype={2:str})
+        snomed_icd.columns = ['CODE', 'VERSION', 'SNOMED']
+        snomed_icd = snomed_icd[snomed_icd['VERSION'] == 'ICD10CM']
+        print(snomed_icd)
+        snomed_icd = snomed_icd.drop_duplicates(subset=['SNOMED'])
+        print(snomed_icd)
+        snomed_icd = snomed_icd.set_index('SNOMED')['CODE']
+
+        print(SNOMED[~SNOMED['SNOMED'].isin(snomed_icd.index)][['SNOMED', 'SNOMED_description']])
+        SNOMED = SNOMED[SNOMED['SNOMED'].isin(snomed_icd.index)]
+        print(SNOMED)
+
+        ICD = SNOMED.rename(columns={'start_date_shift': 'condition_start_date'})
+        ICD['CODE'] = snomed_icd.loc[SNOMED['SNOMED'].values].values
+        print(ICD)
+
+        print(ICD)
+        ICD = ICD.sort_values(by='condition_start_date')
+
+        last_ICD_date = ICD.drop_duplicates(subset='PMBB_ID',keep='last').set_index('PMBB_ID')['condition_start_date']
+        ICD = ICD.drop_duplicates(subset=['PMBB_ID', 'CODE'],keep='first',ignore_index=True)
+        print(ICD)
+
+        ICD_new, icd_map = shorten_codes_long2(ICD,all_icd_re,'CODE',np,all_icd)
+        print(ICD_new)
+        ICD = ICD_new.copy()
+
+        print(ICD)
+        json.dump(icd_map,open('Pheno/FULL_PMBB_ICD_codes.json','w+'))
+
+        inverted_icd_map = {}
+        for condition_code, codes in icd_map.items():
+            conditions = []
+            for condition, defs in config['pheno_defs'].items():
+                if 'icd10_cases' in defs.keys():
+                    case_codes = [c for c in defs['icd10_cases']]
+                if condition_code in case_codes:
+                    conditions.append(condition)
+            conditions = ':'.join(conditions)
+            for code in codes:
+                if code not in inverted_icd_map.keys():
+                    inverted_icd_map[code] = conditions
+                else:
+                    inverted_icd_map[code] += ':' + conditions
+
+        ICD['ICD_CONDITIONS'] = ICD['CODE'].replace(inverted_icd_map)
+        ICD['ICD_CONDITIONS'] = ICD['ICD_CONDITIONS'].mask(~ICD['CODE'].isin(inverted_icd_map.keys()))
+        ICD.to_csv(output.pheno_table_long,index=False)
+
+        pheno_df = pd.DataFrame(index=PMBB.index)
+        ICD_matrix = ICD.dropna(subset=['CODE']).pivot(index='PMBB_ID',columns='CODE',values='condition_start_date').sort_index()
+        ICD_counts = ICD.dropna(subset=['CODE']).pivot_table(index='PMBB_ID',columns='CODE',values='condition_start_date',aggfunc='count').sort_index().fillna(0)
+        ICD_matrix = ICD_matrix.apply(lambda x: x - PMBB.loc[ICD_matrix.index, 'Birth_date_SHIFT'].fillna(datetime(1800, 1, 1)))
+        ICD_matrix = ICD_matrix.apply(lambda x: x.dt.days / 365.25)
+        ICD_matrix = ICD_matrix.sort_index()
+        ICD_matrix = ICD_matrix.loc[ICD_matrix.index.intersection(PMBB.index)]
+        print(ICD_matrix)
+        pheno_df = add_phenos_from_matrix2('icd10',ICD_matrix,icd_map,pheno_df,np,ICD_counts)
+
+        print(pheno_df)
+        all_pheno_cols = add_union_phenos2(pheno_df,np)
+        print(pheno_df)
+
+        if 'AGE' in config['keep_covars']:
+            pheno_df['ENROLLMENT_AGE'] = PMBB['Age_at_Enrollment']
+            pheno_df['CURRENT_AGE'] = PMBB['CURRENT_AGE']
+            for pheno in config['pheno_defs']:
+                pheno_df['AGE_' + pheno] = pheno_df['ENROLLMENT_AGE'].copy()
+                pheno_df['AGE_' + pheno].update(pheno_df[pheno + '_age@dx'])
+
+        pheno_df['SEX'] = PMBB['EHR_SEX']
+        pheno_df['RACE'] = PMBB['EHR_RACE']
+        pheno_df['ETHNICITY'] = PMBB['EHR_ETHNICITY']
+
+        print(pheno_df)
+
+        pheno_df.index.name = 'PMBB_ID'
+
+        print('')
+        print(pheno_df)
+        pheno_df.to_csv(output.pheno_table)
+
+def get_all_procedure_codes2():
+    codes = []
+    for procedure in config['procedures_cpt4']:
+        codes.extend(config['procedures_cpt4'][procedure])
+
+    codes = [str(c) for c in codes]
+    codes = list(set(codes))
+    return codes
+
+rule make_full_pmbb_procedures:
+    output:
+        procedure_table='Pheno/FULL_PMBB_procedures.csv',
+        procedure_table_long='Pheno/FULL_PMBB_procedures_long.csv'
+    params:
+        config['procedures_cpt4']
+    resources: mem_mb=12000
+    run:
+        import pandas as pd
+        from datetime import datetime
+
+        print('Start')
+
+        # PMBB = pd.read_table(PMBB_COVAR, index_col='PMBB_ID', parse_dates=['Birth_date_SHIFT'])
+        PMBB = pd.read_csv(FULL_PMBB_COVAR, index_col='PMBB_ID')
+        PMBB['Birth_date_SHIFT'] = datetime(1970, 1, 1)
+        print(PMBB)
+
+        all_procedure_codes = get_all_procedure_codes2()
+        procedures = pd.read_table(FULL_PMBB_PROCEDURES, parse_dates=['procedure_date_shift'], nrows=None)
+        procedures = procedures[procedures['CPT'].isin(all_procedure_codes)]
+        procedures = procedures[procedures['PMBB_ID'].isin(PMBB.index)]
+        print(procedures)
+        print(all_procedure_codes)
+
+        inverted_procedure_map = {}
+        for procedure, codes in config['procedures_cpt4'].items():
+            print(procedure, codes)
+            for code in codes:
+                if str(code) not in inverted_procedure_map.keys():
+                    inverted_procedure_map[str(code)] = procedure
+                else:
+                    inverted_procedure_map[str(code)] += ':' + procedure
+
+        procedures['CPT_PROCEDURE'] = procedures['CPT'].replace(inverted_procedure_map)
+        procedures.to_csv(output.procedure_table_long, index=False)
+
+        print(procedures.drop_duplicates(subset=['PMBB_ID', 'CPT']))
+
+        procedure_mtx = procedures.drop_duplicates(subset=['PMBB_ID', 'CPT']).pivot(index='PMBB_ID', columns='CPT', values='procedure_date_shift')
+        print(procedure_mtx)
+
+        procedure_df = pd.DataFrame(index=PMBB.index)
+
+        for procedure, codes in config['procedures_cpt4'].items():
+            codes = [str(c) for c in codes if str(c) in procedure_mtx.columns]
+            if len(codes) == 0:
+                continue
+            procedure_date = procedure_mtx[codes].min(axis=1)
+            procedure_binary = (~pd.isnull(procedure_date)).astype(int)
+            procedure_age = (procedure_date - PMBB.loc[procedure_date.index, 'Birth_date_SHIFT']).apply(lambda x: x.days) / 365.25
+
+            procedure_df[procedure] = procedure_binary.reindex(procedure_df.index).fillna(0).astype(int)
+            procedure_df[procedure + '_age'] = procedure_age.reindex(procedure_df.index)
+            procedure_df[procedure + '_date'] = procedure_date.reindex(procedure_df.index)
+
+        procedure_df.index.name = 'PMBB_ID'
+        procedure_cols = [p for p in config['procedures_cpt4'].keys() if p in procedure_df.columns]
+
+        print('')
+        print(procedure_df)
+        procedure_df.to_csv(output.procedure_table)
+
+rule make_phenotypes_full:
+    output:
+        pheno='Pheno/FULL_PMBB_all_cleaned_phenos.csv'
+    input:
+        icd='Pheno/FULL_PMBB_pheno_covars.csv',
+        icd_long='Pheno/FULL_PMBB_phenotypes_long.csv',
+        cpt='Pheno/FULL_PMBB_procedures.csv',
+        cpt_long='Pheno/FULL_PMBB_procedures_long.csv'
+    resources: mem_mb=20000
+    run:
+        import pandas as pd
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from datetime import datetime
+        import sys
+
+        rep_age_min = 15
+        rep_age_max = 50
+
+        df = pd.read_csv(input.icd, index_col='PMBB_ID')
+        df = df[df['SEX'] == 'Female']
+        # df = df.dropna(subset=['ENROLLMENT_AGE'])
+
+        print(df['not_uterine_endometriosis_icd'].value_counts())
+        print(df['endometriosis_icd'].value_counts())
+
+        cpt = pd.read_csv(input.cpt, index_col='PMBB_ID')
+        cpt = cpt[cpt.index.isin(df.index)]
+        print(cpt['atlas_laproscopy'].value_counts())
+        print(cpt['atlas_ultrasound_laproscopy'].value_counts())
+
+        cpt_long = pd.read_csv(input.cpt_long, parse_dates=['procedure_date_shift'])
+        cpt_long = cpt_long.dropna(subset=['procedure_date_shift'])
+        cpt_long = cpt_long[cpt_long['PMBB_ID'].isin(df.index)]
+        print(cpt_long)
+        print(cpt_long['CPT_PROCEDURE'].value_counts())
+
+        PMBB_COVAR = pd.read_csv(PMBB_ENROLLMENT_AGE, index_col='PMBB_ID', parse_dates=['birth_date_shift'])
+        PMBB_COVAR = PMBB_COVAR.reindex(df.index)
+        print(PMBB_COVAR)
+
+        cpt_long['AGE_AT_EVENT'] = (cpt_long['procedure_date_shift'].values - PMBB_COVAR.loc[cpt_long['PMBB_ID'], 'birth_date_shift']).apply(lambda x: x.days / 365.25).values
+        cpt_long['AGE_AT_EVENT'] = (cpt_long['procedure_date_shift'] - datetime(1970, 1, 1)).dt.days / 365.25
+
+        lap_cpt_long = cpt_long[cpt_long['CPT_PROCEDURE'].str.contains('atlas_laproscopy')].copy()
+        lap_us_cpt_long = cpt_long[cpt_long['CPT_PROCEDURE'].str.contains('atlas_ultrasound_laproscopy')].copy()
+
+        lap_cpt_long_RA = lap_cpt_long[lap_cpt_long['AGE_AT_EVENT'].between(rep_age_min, rep_age_max)]
+        lap_us_cpt_long_RA = lap_us_cpt_long[lap_us_cpt_long['AGE_AT_EVENT'].between(rep_age_min, rep_age_max)]
+
+        print(lap_cpt_long['AGE_AT_EVENT'].describe(), '\n')
+
+        icd_long = pd.read_csv(input.icd_long, parse_dates=['condition_start_date'])
+        icd_long = icd_long[icd_long['PMBB_ID'].isin(df.index)]
+        icd_long['AGE_AT_EVENT'] = (icd_long['condition_start_date'].values - PMBB_COVAR.loc[icd_long['PMBB_ID'], 'birth_date_shift']).apply(lambda x: x.days / 365.25).values
+        icd_long['AGE_AT_EVENT'] = (icd_long['condition_start_date'] - datetime(1970, 1, 1)).dt.days / 365.25
+
+        endo_icd_long = icd_long[(icd_long['ICD_CONDITIONS'].str.contains('endometriosis')) &
+                                 ~(icd_long['ICD_CONDITIONS'].str.contains(':uterine_endometriosis'))].copy()
+        endo_icd_long_RA = endo_icd_long[endo_icd_long['AGE_AT_EVENT'].between(rep_age_min, rep_age_max)]
+
+        endo_icd_long_with_uterine = icd_long[icd_long['ICD_CONDITIONS'].str[:13] == 'endometriosis'].copy()
+        endo_icd_long_RA_with_uterine = endo_icd_long_with_uterine[endo_icd_long_with_uterine['AGE_AT_EVENT'].between(rep_age_min, rep_age_max)]
+
+        pheno = pd.DataFrame(index=df.index)
+
+        endo_counts = endo_icd_long['PMBB_ID'].value_counts()
+        endo_with_uterine_counts = endo_icd_long_with_uterine['PMBB_ID'].value_counts()
+
+        pheno[['ICD_1', 'ICD_2', 'ICD_1_with_N80.0', 'ICD_2_with_N80.0']] = 0
+        pheno.loc[endo_counts.index, 'ICD_1'] = 1
+        pheno.loc[endo_counts[endo_counts > 1].index, 'ICD_2'] = 1
+        pheno.loc[endo_with_uterine_counts.index, 'ICD_1_with_N80.0'] = 1
+        pheno.loc[endo_with_uterine_counts[endo_with_uterine_counts > 1].index, 'ICD_2_with_N80.0'] = 1
+
+        cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long,lap_cpt_long)
+        new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'ALL',pheno.index)
+        pheno = pd.concat([pheno, new_pheno],axis=1)
+
+        cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long_RA,lap_cpt_long_RA)
+        new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'RA',pheno.index)
+        pheno = pd.concat([pheno, new_pheno],axis=1)
+
+        cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long_with_uterine,lap_cpt_long)
+        new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'ALL_with_N80.0',pheno.index)
+        pheno = pd.concat([pheno, new_pheno],axis=1)
+
+        cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long_RA_with_uterine,lap_cpt_long_RA)
+        new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'RA_with_N80.0',pheno.index)
+        pheno = pd.concat([pheno, new_pheno],axis=1)
+
+        cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long,lap_us_cpt_long)
+        new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'ALL_with_US',pheno.index)
+        pheno = pd.concat([pheno, new_pheno],axis=1)
+
+        cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long_RA,lap_us_cpt_long_RA)
+        new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'RA_with_US',pheno.index)
+        pheno = pd.concat([pheno, new_pheno],axis=1)
+
+        cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long_with_uterine,lap_us_cpt_long)
+        new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'ALL_with_N80.0_with_US',pheno.index)
+        pheno = pd.concat([pheno, new_pheno],axis=1)
+
+        cases, controls, exclude, confirmed_controls_3, exclude_3 = get_confirmed_cases_controls(endo_icd_long_RA_with_uterine,lap_us_cpt_long_RA)
+        new_pheno = add_cc1_cc2_phenotype(cases,controls,exclude, confirmed_controls_3, exclude_3,'RA_with_N80.0_with_US',pheno.index)
+        pheno = pd.concat([pheno, new_pheno],axis=1)
+
+        print(df['not_uterine_endometriosis_icd'].value_counts())
+        print(df['endometriosis_icd'].value_counts())
+
+        print(pheno.fillna('NA').apply(lambda x: x.value_counts(), result_type='expand').fillna(0).astype(int).transpose(), '\n')
+        print(pheno[['CC1_ALL', 'CC1_RA', 'ICD_1', 'ICD_2']].fillna('NA').value_counts().sort_index())
+        print(pheno[['CC1_ALL_with_N80.0', 'CC1_RA_with_N80.0', 'ICD_1_with_N80.0', 'ICD_2_with_N80.0']].fillna('NA').value_counts().sort_index())
+        print(pheno[['CC1_ALL_with_N80.0_with_US', 'CC1_RA_with_N80.0_with_US', 'CC2_ALL_with_N80.0_with_US', 'CC2_RA_with_N80.0_with_US']].fillna('NA').value_counts().sort_index())
+
+        keep_cols = [c for c in df.columns if 'PC' not in c and ('age' not in c.lower() or c == 'miscarriage') and 'icd' not in c and 'Related' not in c]
+        print(keep_cols)
+
+        pheno[keep_cols] = df[keep_cols]
+        print(pheno)
+
+        pheno.to_csv(output.pheno)
+
+rule construct_input_data_no_snps_full_PMBB:
+    output:
+        data='Data/non_genotyped_PMBB_data_for_no_snps_clustering.csv'
+    input:
+        PMBB_cov='Pheno/FULL_PMBB_pheno_covars.csv',
+        PMBB_pheno='Pheno/FULL_PMBB_all_cleaned_phenos.csv',
+        geno_fam='/project/PMBB/PMBB-Release-2020-2.0/Genotype/PMBB-Release-2020-2.0_genetic_genotype.fam'
+    resources: mem_mb=5000
+    run:
+        import pandas as pd
+
+        covDF = pd.read_csv(input.PMBB_cov,index_col='PMBB_ID')
+
+        print(covDF)
+
+        pheno = pd.read_csv(input.PMBB_pheno, index_col='PMBB_ID')
+        pheno = pheno.loc[pheno.index.isin(covDF.index)]
+
+        geno_fam = pd.read_table(input.geno_fam, header=None, sep=' ', index_col=0)
+        print('Full PMBB:', len(pheno))
+        pheno = pheno[~pheno.index.isin(geno_fam.index)]
+        print('Non-Genotyped PMBB:', len(pheno))
+
+        use_pheno = 'ICD_1_with_N80.0'
+
+        cases = pheno.index[pheno[use_pheno] == 1]
+        controls = (pheno[use_pheno] == 0).index
+
+        print(len(controls), len(cases))
+        print(pheno[use_pheno].fillna('NA').value_counts())
+
+        feature_cols = [c for c in covDF.columns if 'icd' not in c and ('age' not in c.lower() or c == 'miscarriage') and 'PC' not in c and 'ANCESTRY' not in c and 'SEX' not in c and 'Related' not in c]
+        feature_cols = [c for c in feature_cols if c[-5:] != '_last' and c[-6:] != '_first' and c[-5:].lower() != '_mean']
+
+        feature_df = covDF.loc[cases, feature_cols].copy()
+
+        binary_cols = [c for c in feature_df.columns if len(feature_df[c].unique()) == 2]
+        drop_binary_cols = [c for c in binary_cols if feature_df[c].mean() < 0.01]
+        feature_df = feature_df.drop(columns=drop_binary_cols)
+        binary_cols = [c for c in binary_cols if c not in drop_binary_cols]
+
+        cont_cols = [c for c in feature_df.columns if c not in binary_cols and len(feature_df[c].unique()) > 2]
+
+        print(binary_cols)
+        print(drop_binary_cols)
+        print(cont_cols)
+
+        long_term_outcomes = [c for c in binary_cols if 'cancer' in c]
+        long_term_outcomes.extend([c for c in binary_cols if 'infarction' in c])
+        long_term_outcomes.append('ischemic_heart_disease_acute')
+        long_term_outcomes.append('melanoma')
+
+        risk_factor_cols = sorted([c for c in binary_cols if
+                                   'endo' not in c and 'pregnancy_symptoms' not in c and c not in long_term_outcomes])
+        risk_factor_cols.remove('ulcerative_colitis')
+        risk_factor_cols.remove('crohns')
+        risk_factor_age_cols = [c + '_age@dx' for c in risk_factor_cols]
+
+        risk_factor_df = covDF[risk_factor_cols].copy()
+
+        # Manually drop highly-correlated
+        drop_cols = ['pregnancy_with_abortive_outcome',
+                     'female_organ_cancer',
+                     'abdominal_pelvic_pain']
+
+        risk_factor_cols = [c for c in risk_factor_cols if c not in drop_cols]
+        risk_factor_df = risk_factor_df[risk_factor_cols]
+
+        risk_factor_df = risk_factor_df.loc[cases]
+        risk_factor_df.index.name = 'IID'
+        print(risk_factor_df)
+        risk_factor_df.to_csv(output.data)
+
+rule run_tsne_trial_no_snps:
+    output:
+        dist='TSNE_no_SNPs/dist_mtx_{i}.csv',
+        clusters='TSNE_no_SNPs/same_cluster_mtx_{i}.csv'
+    input:
+        data='Data/non_genotyped_PMBB_data_for_no_snps_clustering.csv'
+    resources: mem_mb=10000
+    run:
+        import pandas as pd
+        from sklearn.manifold import TSNE
+        from sklearn.metrics.pairwise import pairwise_distances
+        from sklearn.cluster import AgglomerativeClustering
+
+        # import warnings filter
+        from warnings import simplefilter
+
+        # ignore all future warnings
+        simplefilter(action='ignore',category=FutureWarning)
+
+        seed_offset = int(wildcards.i)
+        embedding = TSNE(n_components=2, init='pca', perplexity=50, random_state=314159+seed_offset, metric='manhattan')
+        # embedding = UMAP(n_components=2,metric='manhattan',output_metric='euclidean',n_neighbors=100,min_dist=0)
+
+        genes_factors = pd.read_csv(input.data, index_col='IID')
+        print(genes_factors)
+        new_dims = pd.DataFrame(embedding.fit_transform(genes_factors),index=genes_factors.index,columns=['TSNE 1', 'TSNE 2'])
+        print(new_dims)
+
+        temp_dist = pairwise_distances(new_dims)
+        temp_dist /= temp_dist.max().max()
+        temp_dist = pd.DataFrame(temp_dist, index=genes_factors.index, columns=genes_factors.index)
+
+        print(temp_dist)
+
+        model = AgglomerativeClustering(n_clusters=10, affinity='euclidean', linkage='ward')
+        temp_clusters = pd.DataFrame(model.fit_predict(new_dims),index=genes_factors.index)
+
+        temp_cluster_dist = pairwise_distances(temp_clusters)
+        temp_cluster_dist[temp_cluster_dist != 0] = 1
+        temp_cluster_dist = pd.DataFrame(temp_cluster_dist, index=genes_factors.index, columns=genes_factors.index)
+
+        print(temp_cluster_dist)
+
+        temp_dist.to_csv(output.dist)
+        temp_cluster_dist.to_csv(output.clusters)
+
+rule make_average_dist_matrix_no_snps:
+    output:
+        dist='TSNE_Avg_no_SNPs/avg_dist_mtx_{n}.csv',
+        cluster='TSNE_Avg_no_SNPs/avg_same_cluster_mtx_{n}.csv'
+    input:
+        dist_mtcs=lambda wildcards: expand('TSNE_no_SNPs/dist_mtx_{i}.csv', i=list(range(int(wildcards.n)))),
+        cluster_mtcs=lambda wildcards: expand('TSNE_no_SNPs/same_cluster_mtx_{i}.csv', i=list(range(int(wildcards.n))))
+    resources: mem_mb=10000
+    run:
+        import pandas as pd
+        import sys
+
+        sum_dist_mtx = pd.read_csv(input.dist_mtcs[0], index_col='IID', low_memory=False)
+        sum_cluster_mtx = pd.read_csv(input.cluster_mtcs[0], index_col='IID', low_memory=False)
+
+        for f in input.dist_mtcs[1:]:
+            sum_dist_mtx += pd.read_csv(f, index_col='IID', low_memory=False)
+
+        for f in input.cluster_mtcs[1:]:
+            sum_cluster_mtx += pd.read_csv(f, index_col='IID', low_memory=False)
+
+        avg_dist_mtx = sum_dist_mtx / int(wildcards.n)
+        avg_cluster_mtx = sum_cluster_mtx / int(wildcards.n)
+
+        print(avg_dist_mtx)
+        print(avg_cluster_mtx)
+
+        avg_dist_mtx.to_csv(output.dist)
+        avg_cluster_mtx.to_csv(output.cluster)
+
+rule make_random_average_dist_matrix_no_snps:
+    output:
+        dist='TSNE_Random_Avg_no_SNPs/avg_dist_mtx_{i}_{n}.csv',
+        cluster='TSNE_Random_Avg_no_SNPs/avg_same_cluster_mtx_{i}_{n}.csv'
+    input:
+        dist_mtcs=lambda wildcards: expand('TSNE_no_SNPs/dist_mtx_{i}.csv', i=list(range(TOTAL_TSNE_TRIALS))),
+        cluster_mtcs=lambda wildcards: expand('TSNE_no_SNPs/same_cluster_mtx_{i}.csv', i=list(range(TOTAL_TSNE_TRIALS)))
+    resources: mem_mb=10000
+    run:
+        import pandas as pd
+        import numpy as np
+        import sys
+
+        use_num = int(wildcards.n)
+        np.random.seed(314159+int(wildcards.i))
+        use_mtcs = np.random.randint(0, TOTAL_TSNE_TRIALS, size=use_num)
+        input.dist_mtcs = [f'TSNE_no_SNPs/dist_mtx_{i}.csv' for i in use_mtcs]
+        input.cluster_mtcs = [f'TSNE_no_SNPs/same_cluster_mtx_{i}.csv' for i in use_mtcs]
+
+        sum_dist_mtx = pd.read_csv(input.dist_mtcs[0], index_col='IID', low_memory=False)
+        sum_cluster_mtx = pd.read_csv(input.cluster_mtcs[0], index_col='IID', low_memory=False)
+
+        for f in input.dist_mtcs[1:]:
+            sum_dist_mtx += pd.read_csv(f, index_col='IID', low_memory=False)
+
+        for f in input.cluster_mtcs[1:]:
+            sum_cluster_mtx += pd.read_csv(f, index_col='IID', low_memory=False)
+
+        avg_dist_mtx = sum_dist_mtx / use_num
+        avg_cluster_mtx = sum_cluster_mtx / use_num
+
+        print(avg_dist_mtx)
+        print(avg_cluster_mtx)
+
+        avg_dist_mtx.to_csv(output.dist)
+        avg_cluster_mtx.to_csv(output.cluster)
+
+rule check_distance_stability_no_snps:
+    output:
+        dist_plot='Plots/no_snps_dist_mtx_stability.png',
+        cluster_plot='Plots/no_snps_cluster_mtx_stability.png'
+    input:
+        avg_dist_mtcs=expand('TSNE_Avg_no_SNPs/avg_dist_mtx_{n}.csv', n=N_LIST),
+        avg_cluster_dist_mtcs=expand('TSNE_Avg_no_SNPs/avg_same_cluster_mtx_{n}.csv', n=N_LIST),
+        original_data='Data/non_genotyped_PMBB_data_for_no_snps_clustering.csv'
+    run:
+        import pandas as pd
+        from sklearn.metrics.pairwise import pairwise_distances
+        import numpy as np
+        import sys
+        import seaborn as sns
+        import matplotlib.pyplot as plt
+
+        genes_factors = pd.read_csv(input.original_data, index_col='IID')
+        og_dist = pd.DataFrame(pairwise_distances(genes_factors, metric='manhattan'), index=genes_factors.index, columns=genes_factors.index)
+
+        print(og_dist)
+        np.fill_diagonal(og_dist.values, np.nan)
+        test_pair_values = [og_dist.min().min()]
+        test_pair_values.extend(np.nanquantile(og_dist.values, [0.25, 0.5, 0.75]))
+        test_pair_values.append(og_dist.max().max())
+
+        print(test_pair_values)
+
+        test_pairs = {}
+        pair_set_names = ['Min', 'First Quartile', 'Median', 'Third Quartile', 'Max']
+
+        for i, v in enumerate(test_pair_values):
+            r, c = np.where((v-1 <= og_dist) & (og_dist <= v+1))
+            np.random.seed(int(314159+v))
+            keep_coords = np.random.choice(list(range(len(r))), size=min(50, len(r)), replace=False)
+            r2, c2 = r[keep_coords], c[keep_coords]
+            test_pairs[pair_set_names[i]] = []
+            for r_idx, c_idx in zip(r2, c2):
+                test_pairs[pair_set_names[i]].append((og_dist.index[r_idx], og_dist.columns[c_idx]))
+
+        print(test_pairs)
+
+        plot_data = []
+        plot_data_2 = []
+
+        for i, f in enumerate(input.avg_dist_mtcs):
+            df = pd.read_csv(f, index_col='IID', dtype={'IID': str})
+            df2 = pd.read_csv(input.avg_cluster_dist_mtcs[i], index_col='IID', dtype={'IID': str})
+            print(df)
+            for k, pairs in test_pairs.items():
+                for p in pairs:
+                    p1, p2 = p
+
+                    new_row = pd.Series(dtype=object)
+                    new_row['ID1'] = p1
+                    new_row['ID2'] = p2
+                    new_row['Label'] = k
+                    new_row['N'] = N_LIST[i]
+                    new_row['TSNE_Avg_Dist'] = float(df.loc[p1, p2])
+
+                    plot_data.append(new_row)
+
+                    new_row = pd.Series(dtype=object)
+                    new_row['ID1'] = p1
+                    new_row['ID2'] = p2
+                    new_row['Label'] = k
+                    new_row['N'] = N_LIST[i]
+                    new_row['TSNE_Same_Cluster_Fraction'] = 1 - float(df2.loc[p1, p2])
+
+                    plot_data_2.append(new_row)
+
+        plot_df = pd.concat(plot_data, axis=1).transpose()
+        print(plot_df)
+
+        sns.pointplot(data=plot_df, x='N', y='TSNE_Avg_Dist', hue='Label', palette='turbo', errorbar='se')
+        plt.legend(bbox_to_anchor=(1.02, 1),loc='upper left',borderaxespad=0)
+        plt.savefig(output.dist_plot, dpi=150, bbox_inches='tight')
+        plt.clf()
+
+        plot_df = pd.concat(plot_data_2, axis=1).transpose()
+        print(plot_df)
+
+        sns.pointplot(data=plot_df, x='N', y='TSNE_Same_Cluster_Fraction', hue='Label', palette='turbo', errorbar='se')
+        plt.legend(bbox_to_anchor=(1.02, 1), loc='upper left',borderaxespad=0)
+        plt.savefig(output.cluster_plot, dpi=150, bbox_inches='tight')
+
+rule check_distance_random_stability_no_snps:
+    output:
+        dist_plot='Plots/no_snps_dist_mtx_random_{n}_stability.png',
+        cluster_plot='Plots/no_snps_cluster_mtx_random_{n}_stability.png'
+    input:
+        avg_dist_mtcs=expand('TSNE_Random_Avg_no_SNPs/avg_dist_mtx_{i}_{{n}}.csv', i=list(range(100))),
+        avg_cluster_dist_mtcs=expand('TSNE_Random_Avg_no_SNPs/avg_same_cluster_mtx_{i}_{{n}}.csv', i=list(range(100))),
+        original_data='Data/non_genotyped_PMBB_data_for_no_snps_clustering.csv'
+    run:
+        import pandas as pd
+        from sklearn.metrics.pairwise import pairwise_distances
+        import numpy as np
+        import sys
+        import seaborn as sns
+        import matplotlib.pyplot as plt
+
+        genes_factors = pd.read_csv(input.original_data, index_col='IID')
+        og_dist = pd.DataFrame(pairwise_distances(genes_factors, metric='manhattan'), index=genes_factors.index, columns=genes_factors.index)
+
+        print(og_dist)
+        np.fill_diagonal(og_dist.values, np.nan)
+        test_pair_values = [og_dist.min().min()]
+        test_pair_values.extend(np.nanquantile(og_dist.values, [0.25, 0.5, 0.75]))
+        test_pair_values.append(og_dist.max().max())
+
+        print(test_pair_values)
+
+        test_pairs = {}
+        pair_set_names = ['Min', 'First Quartile', 'Median', 'Third Quartile', 'Max']
+
+        for i, v in enumerate(test_pair_values):
+            r, c = np.where((v-1 <= og_dist) & (og_dist <= v+1))
+            np.random.seed(int(314159+v))
+            keep_coords = np.random.choice(list(range(len(r))), size=min(50, len(r)), replace=False)
+            r2, c2 = r[keep_coords], c[keep_coords]
+            test_pairs[pair_set_names[i]] = []
+            for r_idx, c_idx in zip(r2, c2):
+                test_pairs[pair_set_names[i]].append((og_dist.index[r_idx], og_dist.columns[c_idx]))
+
+        print(test_pairs)
+
+        plot_data = []
+        plot_data_2 = []
+
+        for i, f in enumerate(input.avg_dist_mtcs):
+            df = pd.read_csv(f, index_col='IID', dtype={'IID': str})
+            df2 = pd.read_csv(input.avg_cluster_dist_mtcs[i], index_col='IID', dtype={'IID': str})
+            print(df)
+            for k, pairs in test_pairs.items():
+                for p in pairs:
+                    p1, p2 = p
+
+                    new_row = pd.Series(dtype=object)
+                    new_row['ID1'] = p1
+                    new_row['ID2'] = p2
+                    new_row['Label'] = k
+                    new_row['TSNE_Avg_Dist'] = float(df.loc[p1, p2])
+
+                    plot_data.append(new_row)
+
+                    new_row = pd.Series(dtype=object)
+                    new_row['ID1'] = p1
+                    new_row['ID2'] = p2
+                    new_row['Label'] = k
+                    new_row['TSNE_Same_Cluster_Fraction'] = 1 - float(df2.loc[p1, p2])
+
+                    plot_data_2.append(new_row)
+
+        plot_df = pd.concat(plot_data, axis=1).transpose()
+        print(plot_df)
+
+        sns.boxplot(data=plot_df, y='TSNE_Avg_Dist', x='Label', palette='turbo')
+        # plt.legend(bbox_to_anchor=(1.02, 1),loc='upper left',borderaxespad=0)
+        plt.savefig(output.dist_plot, dpi=150, bbox_inches='tight')
+        plt.clf()
+
+        plot_df = pd.concat(plot_data_2, axis=1).transpose()
+        print(plot_df)
+
+        sns.boxplot(data=plot_df, y='TSNE_Same_Cluster_Fraction', x='Label', palette='turbo')
+        # plt.legend(bbox_to_anchor=(1.02, 1), loc='upper left',borderaxespad=0)
+        plt.savefig(output.cluster_plot, dpi=150, bbox_inches='tight')
+
+rule test_cluster_k:
+    output:
+        results='K_Tests/avg_dist_mtx_{i}.csv'
+    input:
+        dist_mtx='TSNE_Random_Avg_no_SNPs/avg_dist_mtx_{i}_200.csv',
+        input_mtx='Data/non_genotyped_PMBB_data_for_no_snps_clustering.csv'
+    resources: mem_mb=20000
+    run:
+        import pandas as pd
+        from sklearn.metrics import silhouette_score
+        from sklearn.cluster import AgglomerativeClustering
+
+        tsne_dist_mtx = pd.read_csv(input.dist_mtx, index_col='IID')
+        genes_factors = pd.read_csv(input.input_mtx, index_col='IID')
+
+        mean_dist = tsne_dist_mtx.mean()
+        outliers = mean_dist.index[mean_dist > (mean_dist.mean() + 3 * mean_dist.std())]
+        # outliers = ['PMBB5722341073505', 'PMBB5894725453370', 'PMBB6992295714524', 'PMBB5746993427018', 'PMBB6404034341995']
+
+        tsne_dist_mtx = tsne_dist_mtx.loc[[i for i in tsne_dist_mtx.index if i not in outliers], [c for c in tsne_dist_mtx.columns if c not in outliers]]
+        genes_factors = genes_factors[~genes_factors.index.isin(outliers)]
+
+
+        def discrete_distortion_score(data, labels):
+            centroids = data.groupby(labels).mean().round()
+
+            individual_distortion = pd.Series(dtype=float,index=data.index)
+
+            for group, subDF in data.groupby(labels):
+                diff = subDF - centroids.loc[group]
+                diff_sq = diff ** 2
+                sum_diff_sq = diff_sq.sum(axis=1)
+                individual_distortion.loc[subDF.index] = sum_diff_sq
+
+            return individual_distortion.sum()
+
+
+        def distortion_score(data, labels):
+            centroids = data.groupby(labels).mean()
+
+            individual_distortion = pd.Series(dtype=float,index=data.index)
+
+            for group, subDF in data.groupby(labels):
+                diff = subDF - centroids.loc[group]
+                diff_sq = diff ** 2
+                sum_diff_sq = diff_sq.sum(axis=1)
+                individual_distortion.loc[subDF.index] = sum_diff_sq
+
+            return individual_distortion.sum()
+
+
+        k_list = list(range(2,20))
+
+        sil_score_list = pd.Series(dtype=float, index=k_list, name='Manhattan')
+        sil_score_list2 = pd.Series(dtype=float, index=k_list, name='Euclidean')
+        sil_score_list3 = pd.Series(dtype=float, index=k_list, name='Cosine')
+        distortion_score_list = pd.Series(dtype=float, index=k_list, name='Distortion')
+        distortion_score_list2 = pd.Series(dtype=float, index=k_list, name='Discrete Distortion')
+
+        for k in k_list:
+            model = AgglomerativeClustering(n_clusters=k, affinity='precomputed', linkage='complete')
+            clusters = model.fit_predict(tsne_dist_mtx)
+            sil_score = silhouette_score(genes_factors,clusters,metric='manhattan')
+            sil_score_list.loc[k] = sil_score
+            sil_score = silhouette_score(genes_factors,clusters,metric='euclidean')
+            sil_score_list2.loc[k] = sil_score
+            sil_score = silhouette_score(genes_factors,clusters,metric='cosine')
+            sil_score_list3.loc[k] = sil_score
+            sil_score = silhouette_score(genes_factors,clusters,metric='l1')
+            dist_score = distortion_score(genes_factors, clusters)
+            distortion_score_list.loc[k] = dist_score
+            dist_score = discrete_distortion_score(genes_factors, clusters)
+            distortion_score_list2.loc[k] = dist_score
+
+        output_df = pd.concat([sil_score_list,
+                               sil_score_list2,
+                               sil_score_list3,
+                               distortion_score_list,
+                               distortion_score_list2], axis=1)
+
+        output_df.index.name = 'K'
+        output_df['Trial'] = int(wildcards.i)
+
+        print(output_df)
+        output_df.to_csv(output.results)
+
+rule merge_k_tests:
+    output:
+        merged='Data/merged_k_tests_long.csv'
+    input:
+        expand('K_Tests/avg_dist_mtx_{i}.csv', i=list(range(50)))
+    resources: mem_mb=20000
+    run:
+        import pandas as pd
+
+        dfs = []
+        for f in input:
+            temp = pd.read_csv(f)
+            dfs.append(temp)
+
+        df = pd.concat(dfs)
+        print(df)
+
+        df.to_csv(output.merged, index=False)

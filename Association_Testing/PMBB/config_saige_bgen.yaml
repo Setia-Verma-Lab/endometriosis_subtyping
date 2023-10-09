@@ -1,0 +1,46 @@
+# Chromosomes to use for GWAS
+chromosomes: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 19]
+
+build: '38'
+
+# Each of these will be subdirectories of your working/project directory
+saige_cohorts: ['PMBB_AFR', 'PMBB_EUR', 'PMBB_ASIAN']
+sex_strat_cohorts: [] # for use when defining different covariates in sex-stratified cohorts
+
+# Lists of phenotypes and covariates to use
+quant_phenos: []
+bin_phenos: ['endometriosis', 'cluster_vs_controls_0', 'cluster_vs_controls_1', 'cluster_vs_controls_2', 'cluster_vs_controls_3', 'cluster_vs_controls_4']
+cat_covars: [] # categorical
+cont_covars: ['PC1', 'PC2', 'PC3', 'PC4']
+
+sex_strat_covars: # for use when defining different covariates in sex-stratified cohorts
+    cat_covars: [ ] # categorical
+    cont_covars: [ ]
+
+# Genotype fileset
+QC_Plink_Prefix: '/project/PMBB/PMBB-Release-2020-2.0/Genotype/PMBB-Release-2020-2.0_genetic_genotype'
+QC_Plink_Flag: '--bfile'
+QC_Plink_Extensions: ['.bed', '.bim', '.fam']
+
+# BGEN file sets
+Step2_BGEN_Prefix: '/project/ritchie_scratch2/PMBB/GSA_V2_45K_NoFilter/merged/bgen/PMBB-Release-2020-2.0_genetic_imputed-topmed-r2_chr'
+Step2_BGEN_Suffix: ''
+Step2_BGEN_Sample: '/project/ritchie02/projects/gwPheWAS/PMBB-Release-2020-2.0_genetic_imputed-topmed-r2_bgen.sample'
+Step2_BGEN_Allele_Order: 'ref-first'
+
+# Plink2 filesets used to create SNP lists
+Step2_PGEN_Prefix: 'Endo_Loci_PMBB/subset.'
+Step2_PGEN_Suffix: ''
+
+# Some bgen datasets have "chr22" and some have just "22" which can mess with SAIGE being able to find variants
+# For PMBB, this value is True. For UKBB, this value is False
+CHR_has_chr_prefix: True
+
+# Step 2 Options
+min_mac: '20'
+min_info: '0.4'
+
+# Merge Options - map SAIGE columns to column names that you want. Add/remove key/value pairs as needed
+col_names:
+    MarkerID: 'ID'
+    p.value: 'P'

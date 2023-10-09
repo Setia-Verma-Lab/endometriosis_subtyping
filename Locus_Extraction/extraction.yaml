@@ -1,0 +1,16 @@
+datasets:
+  PMBB:
+    plink_flag: '--pfile'
+    plink_prefix: '/project/PMBB/PMBB-Release-2020-2.0/Imputed/pgen/PMBB-Release-2020-2.0_genetic_imputed-topmed-r2_chr'
+    plink_ext: ['.pvar', '.pgen', '.psam']
+    build: '38'
+  eMERGE:
+    plink_flag: '--bfile'
+    plink_prefix: '/project/ritchie/datasets/eMERGE/eMERGE_III_Imputed_UW/V2_wHarvard/eMERGE_Info_QC/subset.'
+    plink_ext: ['.bed', '.bim', '.fam']
+    build: '37'
+  UKBB:
+    plink_flag: '--pfile'
+    plink_prefix: '/project/ritchie/datasets/UKBiobank/Common_Var_Plink/Plink-2.0-Dedup/subset.'
+    plink_ext: ['.pvar', '.pgen', '.psam']
+    build: '37'
