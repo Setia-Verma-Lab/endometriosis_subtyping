@@ -1,0 +1,98 @@
+import os
+
+rule all:
+    input:
+        expand('SNP_Lists/{dataset}_to_PMBB_ID_map.txt', dataset=['eMERGE', 'UKBB'])
+
+def get_sumstats(dataset):
+    files = []
+
+    if dataset == 'UKBB':
+        for a in ['AFR', 'EUR', 'ASIAN']:
+            dir = f'UKBB_{a}/Sumstats/'
+            files.extend([dir + f for f in os.listdir(dir)])
+    elif dataset == 'eMERGE':
+        for a in ['AFR', 'EUR']:
+            dir = f'eMERGE_{a}/Sumstats/'
+            files.extend([dir + f for f in os.listdir(dir)])
+    elif dataset == 'PMBB':
+        for a in ['AFR', 'EUR', 'ASIAN']:
+            dir = f'PMBB_{a}/Sumstats/'
+            files.extend([dir + f for f in os.listdir(dir)])
+
+    return files
+
+rule get_all_SNPs:
+    output:
+        table='SNP_Lists/{dataset}_GWAS_variants_liftover_input.txt'
+    input:
+        lambda wildcards: get_sumstats(wildcards.dataset)
+    run:
+        import pandas as pd
+        import sys
+
+        all_tables = []
+        all_ids = set()
+
+        for f in input:
+            print(f)
+            temp = pd.read_table(f)
+            temp['ID'] = temp['ID']
+            temp = temp[['CHR', 'POS', 'ID', 'Allele1', 'Allele2']].set_index('ID')
+            temp = temp[~temp.index.isin(all_ids)]
+            all_ids = all_ids.union(temp.index)
+            all_tables.append(temp)
+
+        full_table = pd.concat(all_tables).reset_index()
+        full_table = full_table.sort_values(by=['CHR', 'POS'])
+        full_table['chrCHR'] = 'chr' + full_table['CHR'].astype(str)
+        full_table['POS+1'] = full_table['POS'] + 1
+        full_table = full_table[['chrCHR', 'POS', 'POS+1', 'ID', 'Allele1', 'Allele2']]
+        print(full_table)
+
+        full_table.to_csv(output.table, index=False, header=False, sep=' ')
+
+rule lift_snplist_b37_to_b38:
+    output:
+        lifted='SNP_Lists/{dataset}_GWAS_variants_liftover_output.txt',
+        failed='SNP_Lists/{dataset}_GWAS_variants_liftover_failed.txt'
+    input:
+        b37='SNP_Lists/{dataset}_GWAS_variants_liftover_input.txt',
+        chain='/project/ritchie/datasets/ucsc-chainfiles/hg19ToHg38.over.chain.gz'
+    envmodules: 'liftOver/20180423'
+    shell:
+        """
+        liftOver -bedPlus=6 {input.b37} {input.chain} {output.lifted} {output.failed}
+        head {output.lifted}
+        """
+
+rule align_to_PMBB:
+    output:
+        map='SNP_Lists/{other_dataset}_to_PMBB_ID_map.txt'
+    input:
+        PMBB='SNP_Lists/PMBB_GWAS_variants_liftover_input.txt',
+        other='SNP_Lists/{other_dataset}_GWAS_variants_liftover_output.txt'
+    run:
+        import pandas as pd
+
+        pmbb = pd.read_table(input.PMBB, header=None, names=['chrCHR', 'POS', 'POS+1', 'ID', 'non_effect', 'effect'], sep=' ')
+        other = pd.read_table(input.other, header=None, names=['chrCHR', 'POS', 'POS+1', 'ID', 'non_effect', 'effect'], index_col=['chrCHR', 'POS', 'non_effect', 'effect'])
+
+        pmbb_forward = pmbb.set_index(['chrCHR', 'POS', 'non_effect', 'effect'])
+        pmbb_backward = pmbb.set_index(['chrCHR', 'POS', 'effect', 'non_effect'])
+
+        match_forward = pmbb_forward.index.intersection(other.index)
+        match_backward = pmbb_backward.index.intersection(other.index)
+
+        print(f'Original Length: {len(other)}')
+        print(f'Forward match: {len(match_forward)}, Backward match: {len(match_backward)}')
+        print(f'No match: {len(other[~(other.index.isin(match_forward) | other.index.isin(match_backward))])}')
+        other = other[(other.index.isin(match_forward) | other.index.isin(match_backward))]
+        print(other)
+
+        other.loc[match_forward, 'PMBB_ID'] = pmbb_forward.loc[match_forward, 'ID'].values
+        other.loc[match_backward, 'PMBB_ID'] = pmbb_backward.loc[match_backward, 'ID'].values
+
+        print(other)
+
+        other[['ID', 'PMBB_ID']].to_csv(output.map, index=False, sep='\t')

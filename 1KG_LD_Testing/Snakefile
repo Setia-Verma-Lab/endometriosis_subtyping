@@ -1,0 +1,91 @@
+locus_window = 5E4
+locus_chr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 19]
+
+rule extract_1kg_loci:
+    output:
+        expand('Loci/1KG_ALL_Endo.subset.{{chr}}{ext}', ext=['.bed', '.bim', '.fam'])
+    input:
+        plink_set=expand('/project/ritchie/datasets/1KG_Phase3/plink_files/plink_merged/ALL_samples_nomultiallelic_updatedSNP_Ids_nopalindromic_chr{{chr}}{ext}', ext=['.bed', '.bim', '.fam']),
+        extract_range='../Locus_Extraction/Rahmioglu_loci_b37.bed'
+    params:
+        plink_prefix='/project/ritchie/datasets/1KG_Phase3/plink_files/plink_merged/ALL_samples_nomultiallelic_updatedSNP_Ids_nopalindromic_chr{chr}',
+        output_prefix='Loci/1KG_ALL_Endo.subset.{chr}'
+    envmodules: 'plink/1.90Beta6.18'
+    shell:
+        """
+        plink --make-bed \
+          --bfile {params.plink_prefix} \
+          --extract range {input.extract_range} \
+          --out {params.output_prefix}
+        """
+
+rule get_rahm_lead_snp_in_1KG:
+    output:
+        snps='SNPs/1KG_Endo.{chr}.txt'
+    input:
+        rahm='../Locus_Extraction/Rahmioglu_processed_signals.csv',
+        bim='Loci/1KG_ALL_Endo.subset.{chr}.bim'
+    run:
+        import pandas as pd
+
+        rahm = pd.read_csv(input.rahm)
+        rahm = rahm[rahm['Chr'] != 'X']
+        rahm[['Chr', 'Position (hg19)']] = rahm[['Chr', 'Position (hg19)']].astype(int)
+        rahm = rahm.set_index(['Chr', 'Position (hg19)'])
+        print(rahm)
+
+        bim = pd.read_table(input.bim, header=None, index_col=[0, 3])
+        print(bim)
+        bim = bim[bim.index.isin(rahm.index)]
+        print(bim)
+
+        open(output.snps, 'w+').write('\n'.join(bim[1]))
+
+rule show_tags_by_chr:
+    output:
+        'TAGS/1KG_ALL_Endo.{chr}.tags.list',
+        'TAGS/1KG_ALL_Endo.{chr}.tags'
+    input:
+        expand('Loci/1KG_ALL_Endo.subset.{{chr}}{ext}',ext=['.bed', '.bim', '.fam']),
+        tag_list='SNPs/1KG_Endo.{chr}.txt'
+    params:
+        plink_prefix='Loci/1KG_ALL_Endo.subset.{chr}',
+        output_prefix='TAGS/1KG_ALL_Endo.{chr}'
+    envmodules: 'plink/1.90Beta6.18'
+    shell:
+        """
+        plink --show-tags {input.tag_list} \
+          --list-all \
+          --bfile {params.plink_prefix} \
+          --tag-r2 0.8 \
+          --out {params.output_prefix}
+        """
+
+rule get_rahm_snp_LD_by_chr:
+    output:
+        ld='High_LD_with_Rahm/1KG_ALL_Endo.{chr}.csv'
+    input:
+        ld='TAGS/1KG_ALL_Endo.{chr}.tags.list'
+    run:
+        import pandas as pd
+
+        tags = pd.read_table(input.ld, sep='\s+')
+        all_snps = []
+        for _, row in tags.iterrows():
+            all_snps.append(row['SNP'])
+            all_snps.extend(row['TAGS'].split('|'))
+
+        all_snps = pd.DataFrame(all_snps, columns=['SNP'])
+        all_snps[['CHR', 'POS', 'REF', 'ALT']] = all_snps['SNP'].str.split(':', expand=True)
+        print(all_snps)
+
+        all_snps.to_csv(output.ld, index=False)
+
+rule merge_tag_snps:
+    output:
+        table='Rahmioglu_tag_snps_b37.csv',
+        list='Rahmioglu_tag_snps_b37.txt',
+        liftover='Rahmioglu_tag_snps_b37.liftover_input.txt',
+        extract_range='Rahmioglu_tag_snps_b37.bed'
+    input:
+        expand('High_LD_with_Rahm/1KG_ALL_Endo.{chr}.csv', )
