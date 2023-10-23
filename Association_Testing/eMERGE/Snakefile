@@ -62,7 +62,7 @@ rule make_chr_eMERGE_endo_bfiles:
         plink_set=expand('Endo_Loci_eMERGE/subset.{{chr}}{ext}', ext=['.bed', '.bim', '.fam'])
     input:
         plink_set=expand('/project/ritchie/datasets/eMERGE/eMERGE_III_Imputed_UW/V2_wHarvard/eMERGE_Info_QC/subset.{{chr}}{ext}', ext=['.bed', '.bim', '.fam']),
-        extract_range='../../Locus_Extraction/Rahmioglu_loci_b37.bed'
+        extract_range='../../1KG_LD_Testing/Rahmioglu_tag_snps_b37.bed'
     params:
         plink_prefix='/project/ritchie/datasets/eMERGE/eMERGE_III_Imputed_UW/V2_wHarvard/eMERGE_Info_QC/subset.{chr}',
         output_prefix='Endo_Loci_eMERGE/subset.{chr}'

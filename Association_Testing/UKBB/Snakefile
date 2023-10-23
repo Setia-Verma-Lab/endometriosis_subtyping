@@ -63,7 +63,7 @@ rule make_chr_UKBB_endo_pgen:
         plink_set=expand('Endo_Loci_UKBB/subset.{{chr}}{ext}', ext=['.pgen', '.pvar', '.psam'])
     input:
         plink_set=expand('/project/ritchie/datasets/UKBiobank/Common_Var_Plink/Plink-2.0-Dedup/subset.{{chr}}{ext}', ext=['.pgen', '.pvar', '.psam']),
-        extract_range='../../Locus_Extraction/Rahmioglu_loci_b37.bed'
+        extract_range='../../1KG_LD_Testing/Rahmioglu_tag_snps_b37.bed'
     params:
         plink_prefix='/project/ritchie/datasets/UKBiobank/Common_Var_Plink/Plink-2.0-Dedup/subset.{chr}',
         output_prefix='Endo_Loci_UKBB/subset.{chr}'

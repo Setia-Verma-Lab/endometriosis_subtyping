@@ -62,7 +62,7 @@ rule make_chr_PMBB_endo_pgen:
         plink_set=expand('Endo_Loci_PMBB/subset.{{chr}}{ext}', ext=['.pgen', '.pvar', '.psam'])
     input:
         plink_set=expand('/project/PMBB/PMBB-Release-2020-2.0/Imputed/pgen/PMBB-Release-2020-2.0_genetic_imputed-topmed-r2_chr{{chr}}{ext}', ext=['.pgen', '.pvar', '.psam']),
-        extract_range='../../Locus_Extraction/Rahmioglu_loci_b38.bed'
+        extract_range='../../1KG_LD_Testing/Rahmioglu_tag_snps_b38.bed'
     params:
         plink_prefix='/project/PMBB/PMBB-Release-2020-2.0/Imputed/pgen/PMBB-Release-2020-2.0_genetic_imputed-topmed-r2_chr{chr}',
         output_prefix='Endo_Loci_PMBB/subset.{chr}'

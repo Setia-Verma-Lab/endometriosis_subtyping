@@ -1,5 +1,9 @@
-locus_window = 5E4
+locus_window = 1E6
 locus_chr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 19]
+
+rule all:
+    input:
+        'Rahmioglu_tag_snps_b38.bed'
 
 rule extract_1kg_loci:
     output:
@@ -39,7 +43,10 @@ rule get_rahm_lead_snp_in_1KG:
         bim = bim[bim.index.isin(rahm.index)]
         print(bim)
 
-        open(output.snps, 'w+').write('\n'.join(bim[1]))
+        if wildcards.chr == '13':
+            open(output.snps, 'w+').write('13:50979655:C:T')
+        else:
+            open(output.snps, 'w+').write('\n'.join(bim[1]))
 
 rule show_tags_by_chr:
     output:
@@ -57,7 +64,7 @@ rule show_tags_by_chr:
         plink --show-tags {input.tag_list} \
           --list-all \
           --bfile {params.plink_prefix} \
-          --tag-r2 0.8 \
+          --tag-r2 0.5 \
           --out {params.output_prefix}
         """
 
@@ -84,8 +91,37 @@ rule get_rahm_snp_LD_by_chr:
 rule merge_tag_snps:
     output:
         table='Rahmioglu_tag_snps_b37.csv',
-        list='Rahmioglu_tag_snps_b37.txt',
+        list='Rahmioglu_1KG_tag_snps_b37.txt',
         liftover='Rahmioglu_tag_snps_b37.liftover_input.txt',
         extract_range='Rahmioglu_tag_snps_b37.bed'
     input:
-        expand('High_LD_with_Rahm/1KG_ALL_Endo.{chr}.csv', )
+        expand('High_LD_with_Rahm/1KG_ALL_Endo.{chr}.csv', chr=locus_chr)
+    run:
+        import pandas as pd
+
+        dfs = [pd.read_csv(f) for f in input]
+        df = pd.concat(dfs)
+        df = df.sort_values(by=['CHR', 'POS'])
+        df.to_csv(output.table, index=False)
+
+        df['chrCHR'] = 'chr' + df['CHR'].astype(str)
+        df['POS+1'] = df['POS'] + 1
+
+        df[['chrCHR', 'POS', 'POS']].to_csv(output.liftover, sep=' ', index=False, header=False)
+        df[['chrCHR', 'POS', 'POS+1']].to_csv(output.extract_range, sep='\t', index=False, header=False)
+
+        open(output.list, 'w+').write('\n'.join(df['SNP']))
+        print(df)
+
+rule liftover_tag_snps:
+    output:
+        b38='Rahmioglu_tag_snps_b38.bed',
+        failed='failed_tag_snps.txt'
+    input:
+        b37='Rahmioglu_tag_snps_b37.bed',
+        chain='/project/ritchie/datasets/ucsc-chainfiles/hg19ToHg38.over.chain.gz'
+    envmodules: 'liftOver/20180423'
+    shell:
+        """
+        liftOver {input.b37} {input.chain} {output.b38} {output.failed}
+        """
