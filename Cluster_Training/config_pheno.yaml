@@ -1,0 +1,198 @@
+pheno_defs:
+  endometriosis:
+    icd10_cases: ['N80.*']
+    icd9_cases: ['617.*']
+  uterine_endometriosis:
+    icd10_cases: ['N80.0']
+    icd9_cases: ['617.0']
+  adenomyosis:
+    icd10_cases: ['N80.03']
+    icd9_cases: ['617.03']
+  not_uterine_endometriosis:
+    icd10_cases: ['N80.*']
+    icd9_cases: ['617.*']
+    icd10_exclude: ['N80.0']
+    icd9_exclude: ['617.0']
+  not_adeno_endo:
+    icd10_cases: ['N80.*']
+    icd9_cases: ['617.*']
+    icd10_exclude: ['N80.03']
+    icd9_exclude: ['617.03']
+  endo_N80.1:
+    icd10_cases: ['N80.1']
+    icd9_cases: ['617.1']
+  endo_N80.2:
+    icd10_cases: ['N80.2']
+    icd9_cases: ['617.2']
+  endo_N80.3:
+    icd10_cases: ['N80.3']
+    icd9_cases: ['617.3']
+  endo_N80.4:
+    icd10_cases: ['N80.4']
+    icd9_cases: ['617.4']
+  endo_N80.5:
+    icd10_cases: ['N80.5']
+    icd9_cases: ['617.5']
+  endo_N80.6:
+    icd10_cases: ['N80.6']
+    icd9_cases: ['617.6']
+  endo_N80.8:
+    icd10_cases: ['N80.8']
+    icd9_cases: ['617.8']
+  endo_N80.9:
+    icd10_cases: ['N80.9']
+    icd9_cases: ['617.9']
+  breast_cancer:
+    icd10_cases: ['C50']
+    icd9_cases: ['174']
+  cervical_cancer:
+    icd10_cases: ['C53']
+    icd9_cases: ['180']
+  ovarian_cancer:
+    icd10_cases: ['C56']
+    icd9_cases: ['183.0']
+  uterine_cancer:
+    icd10_cases: ['C55']
+    icd9_cases: ['182']
+  non_hodgkins_lymphoma:
+    icd10_cases: ['C85']
+  melanoma:
+    icd10_cases: ['C43']
+    icd9_cases: ['172']
+  thyroid_cancer:
+    icd10_cases: ['C73']
+    icd9_cases: ['193']
+  leiomyoma_of_uterus:
+    icd10_cases: ['D25']
+    icd9_cases: ['218']
+  pcos:
+    icd10_cases: ['E28.2']
+    icd9_cases: ['256.4', '628.0']
+  type_2_diabetes:
+    icd10_cases: ['E11']
+    icd9_codes: ['250.*0', '250.*2']
+  abnormal_cholesterol:
+    icd10_cases: ['E78']
+    icd9_cases: ['272']
+  hypertension:
+    icd10_cases: ['I10']
+    icd9_cases: ['401']
+  acute_myocardial_infarction:
+    icd10_cases: ['I21']
+    icd9_cases: ['410']
+  ischemic_heart_disease_acute:
+    icd10_cases: ['I24']
+    icd9_cases: ['411']
+  ischemic_heart_disease_chronic:
+    icd10_cases: ['I25']
+    icd9_cases: ['414']
+  cerebral_infarction:
+    icd10_cases: ['I63']
+    icd9_cases: ['434.*1']
+  chronic_pelvic_peritonitis:
+    icd10_cases: ['N73.4']
+    icd9_cases: ['614.7']
+  dysmenorrhea:
+    icd10_cases: ['N94.4', 'N94.5', 'N94.6']
+    icd9_cases: ['625.3']
+  pain_with_sex:
+    icd10_cases: ['N94.1']
+    icd9_cases: ['625.0']
+  infertility:
+    icd10_cases: ['N97.']
+    icd9_cases: ['628']
+  recurrent_pregnancy_loss:
+    icd10_cases: ['N96.']
+    icd9_cases: ['629.81']
+  high_risk_pregnancy_supervision:
+    icd10_cases: ['O09']
+    icd9_cases: ['V23']
+  hypertensive_pregnancy_issues:
+    icd10_cases: ['O1*']
+    icd9_cases: ['642']
+  placental_disorders:
+    icd10_cases: ['O43']
+    icd9_cases: ['641', '656']
+  preterm_labor:
+    icd10_cases: ['O60']
+    icd9_cases: ['644']
+  uncomplicated_delivery_encounter:
+    icd10_cases: ['O80']
+    icd9_cases: ['650']
+  pregnancy_with_abortive_outcome:
+    icd10_cases: ['O0']
+    icd10_exclude: ['O09']
+  miscarriage:
+    icd10_cases: ['O03']
+    icd9_cases: ['634']
+  shortness_of_breath:
+    icd10_cases: ['R06.02']
+    icd9_cases: ['786.05']
+  abdominal_pelvic_pain:
+    icd10_cases: ['R10.']
+    icd9_cases: ['789.0']
+  lower_abdominal_pain:
+    icd10_cases: ['R10.3']
+    icd9_cases: ['789.03', '789.04']
+  dysuria:
+    icd10_cases: ['R30.0']
+    icd9_cases: ['788.1']
+  fibromyalgia:
+    icd10_cases: ['M79.7']
+    icd9_cases: ['729.1']
+  migraine:
+    icd10_cases: ['G43']
+    icd9_cases: ['346']
+  ibs:
+    icd10_cases: ['K58']
+    icd9_cases: ['564.1']
+  ulcerative_colitis:
+    icd10_cases: ['K51']
+    icd9_cases: ['556']
+  interstitial_cystitis:
+    icd10_cases: ['N30.1']
+    icd9_cases: ['595.1']
+  irregular_menstruation:
+    icd10_cases: ['N92.']
+    icd9_cases: ['626']
+  rheumatoid_arthritis:
+    icd10_cases: ['M05', 'M06', 'M45']
+    icd9_cases: ['714.0']
+  systemic_lupus_erythematosus:
+    icd10_cases: ['M32']
+    icd9_cases: ['710.0']
+  multiple_sclerosis:
+    icd10_cases: ['G35']
+    icd9_cases: ['340']
+  asthma:
+    icd10_cases: ['J45']
+    icd9_cases: ['493']
+  nicotine_dependence:
+    icd10_cases: ['F17']
+    icd9_cases: ['305.1']
+  alcohol_dependence:
+    icd10_cases: ['F10.2']
+    icd9_cases: ['303']
+
+keep_covars: ['AGE', 'SEX', 'BMI', 'BP']
+keep_PCs: 10
+
+procedures_cpt4:
+  ovarian_cystectomy: [58925]
+  oophorectomy: [58940, 58943, 58953, 58954]
+  c-section: [59510, 59514]
+  vaginal_delivery: [59400, 59409, 59410, 59425, 59426, 59430]
+  abdominal_hysterectomy: [58150, 58152, 58180, 58200, 58210]
+  vaginal_hysterectomy: [58260, 58262, 58263, 58267, 58270, 58275, 58280, 58285, 58290, 58291, 58292, 58293, 58294]
+  laproscopic_hysterectomy: [58541, 58542, 58543, 58544, 58548, 58550, 58552, 58553, 58554, 58570, 58571, 58572, 58573, 58575]
+  diagnostic_laproscopy: [49320]
+  IVF: [58974]
+  diagnostic_hysteroscopy: [58555]
+#  atlas_laproscopy: [36415, 49000, 49322, 51992, 57425, 58541, 58542, 58543, 58544, 58546, 58548, 58550, 58552, 58553, 58554, 58570, 58571, 58572, 58573, 58660, 58661, 58662, 58670, 58671, 58673, 58679, 76830, 76856, 88305, 99213, 99214]
+  atlas_laproscopy: [49000, 49322, 51992, 57425, 58541, 58542, 58543, 58544, 58546, 58548, 58550, 58552, 58553, 58554, 58570, 58571, 58572, 58573, 58660, 58661, 58662, 58670, 58671, 58673, 58679]
+  atlas_ultrasound_laproscopy: [49000, 49322, 51992, 57425, 58541, 58542, 58543, 58544, 58546, 58548, 58550, 58552, 58553, 58554, 58570, 58571, 58572, 58573, 58660, 58661, 58662, 58670, 58671, 58673, 58679, 76830, 76856]
+
+
+ancestries: ['AFR', 'EUR', 'AMR', 'SAS', 'EAS', 'ASIAN']
+lab_list: []
+

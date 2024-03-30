@@ -1,7 +1,8 @@
 
 rule all:
     input:
-        expand('{dataset}/{dataset}_{ancestry}/sample_list.txt', dataset=['PMBB', 'UKBB', 'eMERGE'], ancestry=['EUR', 'AFR', 'ASIAN'])
+        expand('{dataset}/{dataset}_{ancestry}/sample_list.txt', dataset=['PMBB', 'UKBB', 'eMERGE'], ancestry=['EUR', 'AFR', 'ASIAN']),
+        'all_sample_sizes.csv'
 
 rule set_up_dataset_cohorts:
     output:
@@ -20,6 +21,7 @@ rule set_up_dataset_cohorts:
 
         pheno_cols = ['endometriosis']
         pheno_cols.extend([c for c in pheno.columns if 'cluster' in c])
+        pheno_cols.append('CURRENT_AGE')
 
         if wildcards.dataset != 'PMBB':
             pheno.index = pheno.index.to_series().str.replace(wildcards.dataset, '')
@@ -32,11 +34,15 @@ rule set_up_dataset_cohorts:
         col_map = {}
         if wildcards.dataset == 'eMERGE':
             output_pheno['site'] = output_pheno.index.to_series().str[:2]
-            output_pheno = output_pheno[output_pheno.site.isin(['74', '27', '52'])]
+            keep_sites = ['16', '27', '49', '52', '68', '74']
+            output_pheno = output_pheno[output_pheno.site.isin(keep_sites)]
             genetic_data_samples = pd.read_table('/project/ritchie/datasets/eMERGE/eMERGE_III_Imputed_UW/V2_wHarvard/eMERGE_Info_QC/subset.22.fam', header=None, dtype=str)[0]
             print(output_pheno['site'].value_counts())
             output_pheno['site_27'] = (output_pheno['site'] == '27').astype(int)
+            output_pheno['site_49'] = (output_pheno['site'] == '49').astype(int)
             output_pheno['site_52'] = (output_pheno['site'] == '52').astype(int)
+            output_pheno['site_68'] = (output_pheno['site'] == '68').astype(int)
+            output_pheno['site_74'] = (output_pheno['site'] == '74').astype(int)
             pc_file = '/project/ritchie01/datasets/eMERGE/eMERGE_III_Imputed_UW/V2_wHarvard/R-squared_summary_and_accessory_files/chr1-22.merged.maf.05.LD_1000_50_.7_pruned.no_tri.plink.pca-approx.eigenvec'
             pc_file_index_col = 'IID'
             need_cols = [pc_file_index_col]
@@ -71,3 +77,44 @@ rule set_up_dataset_cohorts:
         print(output_pheno)
         output_pheno.to_csv(output.pheno, sep='\t')
         open(output.samples, 'w+').write('\n'.join(output_pheno.index))
+
+rule make_sample_sizes:
+    output:
+        counts='all_sample_sizes.csv'
+    input:
+        pheno_file='../Feature_Extraction/cluster_phenotypes_multi_ancestry.csv',
+        aou_counts='AOU/AOU_case_counts.csv'
+    run:
+        import pandas as pd
+
+        pheno = pd.read_csv(input.pheno_file, index_col='IID')
+        print(pheno)
+        aou = pd.read_csv(input.aou_counts, index_col=0)
+        aou.index.name = 'PHENO'
+
+        print('\nAOU')
+        print(aou)
+
+        phenos = [f'cluster_vs_controls_{i}' for i in range(1, 6)]
+        phenos.append('endometriosis')
+
+        ukbb = pheno[pheno['Dataset'] == 'UKBB'].groupby('ANCESTRY')[phenos].sum()
+        pmbb = pheno[pheno['Dataset'] == 'PMBB'].groupby('ANCESTRY')[phenos].sum()
+        emerge = pheno[pheno['Dataset'] == 'eMERGE'].groupby('ANCESTRY')[phenos].sum()
+
+        all = [aou, ukbb, pmbb, emerge]
+        names = ['AOU', 'UKBB', 'PMBB', 'eMERGE']
+
+        sum = pd.DataFrame().reindex_like(ukbb).fillna(0)
+
+        for name, df in zip(names, all):
+            print(f'\n{name}')
+            temp = df.copy()
+            temp = temp.mask(temp < 30).fillna(0)
+            print(temp)
+            sum += temp
+
+        print('\nTotal')
+        print(sum)
+        print(sum.sum(axis=0))
+        sum.to_csv(output.counts)

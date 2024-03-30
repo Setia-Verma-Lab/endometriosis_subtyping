@@ -1,18 +1,22 @@
+include: '/home/guarelin/snakemake_workflows/biofilter_wrapper/Snakefile'
+
 locus_window = 1E6
 locus_chr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 19]
 
 rule all:
     input:
-        'Rahmioglu_tag_snps_b38.bed'
+        'Rahmioglu_tag_snps_b38.bed',
+        'Annotations/tags_biofilter_genes_rsids.csv'
 
 rule extract_1kg_loci:
     output:
         expand('Loci/1KG_ALL_Endo.subset.{{chr}}{ext}', ext=['.bed', '.bim', '.fam'])
     input:
-        plink_set=expand('/project/ritchie/datasets/1KG_Phase3/plink_files/plink_merged/ALL_samples_nomultiallelic_updatedSNP_Ids_nopalindromic_chr{{chr}}{ext}', ext=['.bed', '.bim', '.fam']),
+        # plink_set=expand('/project/ritchie/datasets/1KG_Phase3/plink_files/plink_merged/ALL_samples_nomultiallelic_updatedSNP_Ids_nopalindromic_chr{{chr}}{ext}', ext=['.bed', '.bim', '.fam']),
+        plink_set=expand('/project/ritchie/datasets/1KG_Phase3/plink_files/plink_raw_files/biallelic_autosomes/ALL.chr{{chr}}.snp.biallelic{ext}', ext=['.bed', '.bim', '.fam']),
         extract_range='../Locus_Extraction/Rahmioglu_loci_b37.bed'
     params:
-        plink_prefix='/project/ritchie/datasets/1KG_Phase3/plink_files/plink_merged/ALL_samples_nomultiallelic_updatedSNP_Ids_nopalindromic_chr{chr}',
+        plink_prefix='/project/ritchie/datasets/1KG_Phase3/plink_files/plink_raw_files/biallelic_autosomes/ALL.chr{chr}.snp.biallelic',
         output_prefix='Loci/1KG_ALL_Endo.subset.{chr}'
     envmodules: 'plink/1.90Beta6.18'
     shell:
@@ -31,22 +35,49 @@ rule get_rahm_lead_snp_in_1KG:
         bim='Loci/1KG_ALL_Endo.subset.{chr}.bim'
     run:
         import pandas as pd
+        import sys
+
+        current_chr = int(wildcards.chr)
 
         rahm = pd.read_csv(input.rahm)
         rahm = rahm[rahm['Chr'] != 'X']
         rahm[['Chr', 'Position (hg19)']] = rahm[['Chr', 'Position (hg19)']].astype(int)
-        rahm = rahm.set_index(['Chr', 'Position (hg19)'])
+        rahm = rahm[rahm['Chr'] == current_chr]
+        rahm = rahm.set_index(['Chr', 'Position (hg19)', 'Risk_Allele'])
         print(rahm)
 
-        bim = pd.read_table(input.bim, header=None, index_col=[0, 3])
-        print(bim)
-        bim = bim[bim.index.isin(rahm.index)]
+        bim = pd.read_table(input.bim, header=None)
+        bim1 = bim.set_index([0, 3, 4])
+        bim1 = bim1[bim1.index.isin(rahm.index)]
+        bim2 = bim.set_index([0, 3, 5])
+        bim2 = bim2[bim2.index.isin(rahm.index)]
+
+        bim = pd.concat([bim1.reset_index(), bim2.reset_index()])
         print(bim)
 
-        if wildcards.chr == '13':
-            open(output.snps, 'w+').write('13:50979655:C:T')
-        else:
-            open(output.snps, 'w+').write('\n'.join(bim[1]))
+        snp_list = bim[1].to_list()
+
+        if len(snp_list) != len(rahm):
+            sys.exit()
+            # Making sure all SNPs are accounted for
+            if current_chr == 13:
+                # rs7334326 missing from 1KG
+                # Add rs17074346 EUR LD = 0.98 on LDLink
+                snp_list.append('13:51018722:C:T')
+            elif current_chr == 6:
+                # rs71575922 missing from 1KG
+                # Add rs13206305 EUR LD = 0.81 on LDLink
+                snp_list.append('6:152549309:C:T')
+            elif current_chr == 8:
+                # rs12549438 missing from 1KG
+                # Add rs34788463 EUR LD = 0.994
+                snp_list.append('8:100028003:T:C')
+
+
+        if len(snp_list) != len(rahm):
+            sys.exit()
+
+        open(output.snps, 'w+').write('\n'.join(snp_list))
 
 rule show_tags_by_chr:
     output:
@@ -61,10 +92,12 @@ rule show_tags_by_chr:
     envmodules: 'plink/1.90Beta6.18'
     shell:
         """
+        # originally tried 0.5
         plink --show-tags {input.tag_list} \
           --list-all \
           --bfile {params.plink_prefix} \
-          --tag-r2 0.5 \
+          --tag-kb 500 \
+          --tag-r2 0.1 \
           --out {params.output_prefix}
         """
 
@@ -106,6 +139,10 @@ rule merge_tag_snps:
 
         df['chrCHR'] = 'chr' + df['CHR'].astype(str)
         df['POS+1'] = df['POS'] + 1
+        print(df)
+        df = df.dropna()
+        print(df)
+        df[['POS', 'POS+1']] = df[['POS', 'POS+1']].astype(int)
 
         df[['chrCHR', 'POS', 'POS']].to_csv(output.liftover, sep=' ', index=False, header=False)
         df[['chrCHR', 'POS', 'POS+1']].to_csv(output.extract_range, sep='\t', index=False, header=False)
@@ -119,9 +156,19 @@ rule liftover_tag_snps:
         failed='failed_tag_snps.txt'
     input:
         b37='Rahmioglu_tag_snps_b37.bed',
-        chain='/project/ritchie/datasets/ucsc-chainfiles/hg19ToHg38.over.chain.gz'
+        chain='/project/ritchie/datasets/ucsc-chainfiles/hg19ToHg38.over.chain'
     envmodules: 'liftOver/20180423'
     shell:
         """
         liftOver {input.b37} {input.chain} {output.b38} {output.failed}
+        """
+
+rule make_biofilter_input_positions:
+    output:
+        'Annotations/tags_biofilter_input_positions.txt'
+    input:
+        'Rahmioglu_tag_snps_b38.bed'
+    shell:
+        """
+        awk '{{print $1,"snp"NR,$2}}' {input} > {output}
         """

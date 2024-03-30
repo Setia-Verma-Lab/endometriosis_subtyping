@@ -5,7 +5,8 @@ locus_chr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 19]
 
 rule all:
     input:
-        'Rahmioglu_snps_b38.bed'
+        'Rahmioglu_snps_b38.bed',
+        'Rahmioglu_loci_b38.bed'
 
 rule make_signal_bed:
     output:
@@ -13,13 +14,15 @@ rule make_signal_bed:
         snps='Rahmioglu_snps_b37.bed'
     input:
         signals='Rahmioglu_processed_signals.csv'
+    params:
+        window_size = locus_window
     run:
         import pandas as pd
 
         df = pd.read_csv(input.signals)
         df = df.rename(columns={'Lead SNP': 'RSID', 'Position (hg19)': 'POS'})
-        df['START'] = df['POS'] - locus_window
-        df['END'] = df['POS'] + locus_window
+        df['START'] = df['POS'] - params.window_size
+        df['END'] = df['POS'] + params.window_size
         df[['START', 'END', 'POS']] = df[['START', 'END', 'POS']].astype(int)
         df['chrCHR'] = 'chr' + df['Chr'].astype(str)
         df['POS+1'] = df['POS'] + 1
@@ -31,17 +34,28 @@ rule make_signal_bed:
 
 rule liftover_b37_bed:
     output:
-        b38='Rahmioglu_loci_b38.bed',
+        b38='Rahmioglu_loci_b38_lifted.bed',
         b38_snps='Rahmioglu_snps_b38.bed',
         failed='Rahmioglu_loci_liftover.failed',
         failed_snps='Rahmioglu_snps_liftover.failed'
     input:
         b37='Rahmioglu_loci_b37.bed',
         b37_snps='Rahmioglu_snps_b37.bed',
-        chain='/project/ritchie/datasets/ucsc-chainfiles/hg19ToHg38.over.chain.gz'
+        chain='/project/ritchie/datasets/ucsc-chainfiles/hg19ToHg38.over.chain'
     envmodules: 'liftOver/20180423'
     shell:
         """
         liftOver -bedPlus=4 -tab {input.b37} {input.chain} {output.b38} {output.failed}
         liftOver -bedPlus=4 -tab {input.b37_snps} {input.chain} {output.b38_snps} {output.failed_snps}
+        """
+
+rule make_b38_ranges_no_drops:
+    output:
+        b38='Rahmioglu_loci_b38.bed'
+    input:
+        b38_snps='Rahmioglu_snps_b38.bed',
+    envmodules: 'liftOver/20180423'
+    shell:
+        """
+        awk '{{print $1,($2-5E5<0)?0:$2-5E5,$2+5E5,$4}}' {input} > {output}
         """

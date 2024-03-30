@@ -2,7 +2,7 @@ import os
 
 rule all:
     input:
-        expand('SNP_Lists/{dataset}_to_PMBB_ID_map.txt', dataset=['eMERGE', 'UKBB'])
+        expand('SNP_Lists/{dataset}_to_PMBB_ID_map.txt', dataset=['eMERGE', 'UKBB', 'AOU'])
 
 def get_sumstats(dataset):
     files = []
@@ -18,6 +18,10 @@ def get_sumstats(dataset):
     elif dataset == 'PMBB':
         for a in ['AFR', 'EUR', 'ASIAN']:
             dir = f'PMBB_{a}/Sumstats/'
+            files.extend([dir + f for f in os.listdir(dir)])
+    elif dataset == 'AOU':
+        for a in ['AFR', 'EUR', 'ASIAN']:
+            dir = f'AOU_{a}/Sumstats/'
             files.extend([dir + f for f in os.listdir(dir)])
 
     return files
@@ -37,6 +41,7 @@ rule get_all_SNPs:
         for f in input:
             print(f)
             temp = pd.read_table(f)
+            temp = temp.rename(columns={'MarkerID': 'ID', 'p.value': 'P'})
             temp['ID'] = temp['ID']
             temp = temp[['CHR', 'POS', 'ID', 'Allele1', 'Allele2']].set_index('ID')
             temp = temp[~temp.index.isin(all_ids)]
@@ -45,7 +50,11 @@ rule get_all_SNPs:
 
         full_table = pd.concat(all_tables).reset_index()
         full_table = full_table.sort_values(by=['CHR', 'POS'])
-        full_table['chrCHR'] = 'chr' + full_table['CHR'].astype(str)
+        if wildcards.dataset != 'AOU':
+            full_table['chrCHR'] = 'chr' + full_table['CHR'].astype(str)
+        else:
+            full_table['chrCHR'] = full_table['CHR']
+            full_table['CHR'] = full_table['chrCHR'].str.replace('chr', '')
         full_table['POS+1'] = full_table['POS'] + 1
         full_table = full_table[['chrCHR', 'POS', 'POS+1', 'ID', 'Allele1', 'Allele2']]
         print(full_table)
@@ -58,7 +67,7 @@ rule lift_snplist_b37_to_b38:
         failed='SNP_Lists/{dataset}_GWAS_variants_liftover_failed.txt'
     input:
         b37='SNP_Lists/{dataset}_GWAS_variants_liftover_input.txt',
-        chain='/project/ritchie/datasets/ucsc-chainfiles/hg19ToHg38.over.chain.gz'
+        chain='/project/ritchie/datasets/ucsc-chainfiles/hg19ToHg38.over.chain'
     envmodules: 'liftOver/20180423'
     shell:
         """
@@ -71,12 +80,14 @@ rule align_to_PMBB:
         map='SNP_Lists/{other_dataset}_to_PMBB_ID_map.txt'
     input:
         PMBB='SNP_Lists/PMBB_GWAS_variants_liftover_input.txt',
-        other='SNP_Lists/{other_dataset}_GWAS_variants_liftover_output.txt'
+        other=lambda wildcards: 'SNP_Lists/{other_dataset}_GWAS_variants_liftover_output.txt' if wildcards.other_dataset != 'AOU' else 'SNP_Lists/{other_dataset}_GWAS_variants_liftover_input.txt'
     run:
         import pandas as pd
 
         pmbb = pd.read_table(input.PMBB, header=None, names=['chrCHR', 'POS', 'POS+1', 'ID', 'non_effect', 'effect'], sep=' ')
-        other = pd.read_table(input.other, header=None, names=['chrCHR', 'POS', 'POS+1', 'ID', 'non_effect', 'effect'], index_col=['chrCHR', 'POS', 'non_effect', 'effect'])
+        other = pd.read_table(input.other, header=None, names=['chrCHR', 'POS', 'POS+1', 'ID', 'non_effect', 'effect'], index_col=['chrCHR', 'POS', 'non_effect', 'effect'], sep=' ' if wildcards.other_dataset == 'AOU' else '\t')
+
+        print(other)
 
         pmbb_forward = pmbb.set_index(['chrCHR', 'POS', 'non_effect', 'effect'])
         pmbb_backward = pmbb.set_index(['chrCHR', 'POS', 'effect', 'non_effect'])

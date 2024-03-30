@@ -1,4 +1,4 @@
-include: '/project/ritchie/lindsay_snakemake_workflows/saige_gwas_bgen/Snakefile'
+include: '/home/guarelin/snakemake_workflows/saige_gwas_bgen/Snakefile'
 include: '/project/ritchie/lindsay_snakemake_workflows/biofilter_wrapper/Snakefile'
 
 import pandas as pd
@@ -27,6 +27,8 @@ rule make_sample_size_table:
     output:
         samples='sample_size_table.csv',
         full_samples='unfiltered_sample_size_table.csv'
+    params:
+        config['bin_phenos']
     resources: mem_mb=5000
     run:
         import pandas as pd
@@ -35,6 +37,7 @@ rule make_sample_size_table:
         dfs = []
 
         outcomes = config['bin_phenos']
+        print(outcomes)
 
         for f in input:
             temp = pd.read_table(f, index_col='IID')

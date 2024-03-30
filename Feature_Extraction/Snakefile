@@ -20,7 +20,7 @@ rule make_cluster_phenotypes:
         results='cluster_phenotypes_multi_ancestry.csv'
     input:
         model='../Cluster_Training/Models/non_geno_PMBB_transfer_clusters.pickle',
-        pheno_files=expand('Pheno/{dataset}_pheno_covars.csv', dataset=['PMBB', 'eMERGE', 'UKBB']),
+        pheno_files=expand('Pheno/{dataset}_pheno_covars.csv', dataset=['PMBB_2.3', 'eMERGE', 'UKBB']),
         evec='/project/ritchie00/datasets/PMBB_eMERGE_UKBB_Combined/PEU_PCA/pca.eigenvec',
         pmbb_relatedness='pmbb_relatedness_gt_0.2_ibd.genome',
         emerge_relatedness='/project/ritchie/datasets/eMERGE/eMERGE_III_Imputed_UW/V2_wHarvard/R-squared_summary_and_accessory_files/ibd.Z0_lt_0.83.Z1_gt_0.1.3rd_degree.one_row_per_family',
@@ -36,7 +36,7 @@ rule make_cluster_phenotypes:
 
         need_cols = model.feature_names_in_
 
-        pmbb = pd.read_csv('Pheno/PMBB_pheno_covars.csv', index_col='PMBB_ID', nrows=None)
+        pmbb = pd.read_csv('Pheno/PMBB_2.3_pheno_covars.csv', index_col='PMBB_ID', nrows=None)
         pmbb['Dataset'] = 'PMBB'
 
         emerge = pd.read_csv('Pheno/eMERGE_pheno_covars.csv', index_col='SUBJID', dtype={'SUBJID': str}, nrows=None)
@@ -45,6 +45,7 @@ rule make_cluster_phenotypes:
 
         ukbb = pd.read_csv('Pheno/UKBB_pheno_covars.csv', index_col='f.eid', dtype={'f.eid': str}, nrows=None)
         ukbb.index = ['UKBB' + i for i in ukbb.index]
+        ukbb['CURRENT_AGE'] = ukbb['AGE']
         ukbb['Dataset'] = 'UKBB'
 
         pheno = pd.concat([pmbb, emerge, ukbb])
@@ -167,7 +168,7 @@ rule make_table_1_info:
     output:
         data='../Manuscript_Tables/table_1_numbers.csv'
     input:
-        pmbb='Pheno/PMBB_pheno_covars.csv',
+        pmbb='Pheno/PMBB_2.3_pheno_covars.csv',
         full_pmbb='../Cluster_Training/Pheno/FULL_PMBB_pheno_covars.csv',
         emerge='Pheno/eMERGE_pheno_covars.csv',
         ukbb='Pheno/UKBB_pheno_covars.csv',
@@ -200,7 +201,9 @@ rule make_table_1_info:
         emerge['site'] = emerge.index.to_series().astype(str).str[:2]
         print(pd.crosstab(emerge[emerge['endometriosis'] == 1]['site'],emerge['ANCESTRY']))
         print(emerge)
-        emerge = emerge[emerge.site.isin(['27', '52', '68'])]
+        # emerge = emerge[emerge.site.isin(['27', '52', '68'])]
+        keep_sites = ['16', '27', '49', '52', '68', '74']
+        emerge = emerge[emerge.site.isin(keep_sites)]
         print(emerge)
 
         numbers = pd.DataFrame(index=['NG-PMBB', 'G-PMBB', 'eMERGE', 'UKBB'],columns=['Total', 'Women', 'Cases', 'Controls',
@@ -209,8 +212,14 @@ rule make_table_1_info:
                                                                                       'cu_AGE_controls', 'cu_AGE_std_controls'])
 
         for name, df in zip(numbers.index, [full_pmbb, pmbb, emerge, ukbb]):
+            print(name)
             numbers.loc[name, 'Total'] = len(df)
-            women = df[df['SEX'] == 'Female'].copy()
+
+            if 'SEX' in df.columns:
+                women = df[df['SEX'] == 'Female'].copy()
+            else:
+                women = df[df['GENDER'] == 'Female'].copy()
+
             numbers.loc[name, 'Women'] = len(women)
 
             numbers.loc[name, ['Cases', 'Controls']] = women['endometriosis'].value_counts().loc[[1, 0]].values
@@ -221,8 +230,8 @@ rule make_table_1_info:
                 numbers.loc[name, ['dx_AGE_std_cases']] = women.groupby('endometriosis')['AGE_endometriosis'].std().loc[
                     [1]].values
 
-            numbers.loc[name, ['cu_AGE_cases', 'cu_AGE_controls']] = women.groupby('endometriosis')['CURRENT_AGE'].mean().loc[[1, 0]].values
-            numbers.loc[name, ['cu_AGE_std_cases', 'cu_AGE_std_controls']] = women.groupby('endometriosis')['CURRENT_AGE'].std().loc[[1, 0]].values
+            # numbers.loc[name, ['cu_AGE_cases', 'cu_AGE_controls']] = women.groupby('endometriosis')['CURRENT_AGE'].mean().loc[[1, 0]].values
+            # numbers.loc[name, ['cu_AGE_std_cases', 'cu_AGE_std_controls']] = women.groupby('endometriosis')['CURRENT_AGE'].std().loc[[1, 0]].values
 
         print(numbers)
         numbers.index.name = 'Dataset'

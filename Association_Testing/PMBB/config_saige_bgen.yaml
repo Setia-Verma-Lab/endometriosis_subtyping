@@ -9,9 +9,9 @@ sex_strat_cohorts: [] # for use when defining different covariates in sex-strati
 
 # Lists of phenotypes and covariates to use
 quant_phenos: []
-bin_phenos: ['endometriosis', 'cluster_vs_controls_0', 'cluster_vs_controls_1', 'cluster_vs_controls_2', 'cluster_vs_controls_3', 'cluster_vs_controls_4']
+bin_phenos: ['endometriosis', 'cluster_vs_controls_1', 'cluster_vs_controls_2', 'cluster_vs_controls_3', 'cluster_vs_controls_4', 'cluster_vs_controls_5']
 cat_covars: [] # categorical
-cont_covars: ['PC1', 'PC2', 'PC3', 'PC4']
+cont_covars: ['CURRENT_AGE', 'PC1', 'PC2', 'PC3', 'PC4']
 
 sex_strat_covars: # for use when defining different covariates in sex-stratified cohorts
     cat_covars: [ ] # categorical
@@ -23,7 +23,7 @@ QC_Plink_Flag: '--bfile'
 QC_Plink_Extensions: ['.bed', '.bim', '.fam']
 
 # BGEN file sets
-Step2_BGEN_Prefix: '/project/ritchie_scratch2/PMBB/GSA_V2_45K_NoFilter/merged/bgen/PMBB-Release-2020-2.0_genetic_imputed-topmed-r2_chr'
+Step2_BGEN_Prefix: '/project/ritchie_scratch2_temp/PMBB/GSA_V2_45K_NoFilter/merged/bgen/PMBB-Release-2020-2.0_genetic_imputed-topmed-r2_chr'
 Step2_BGEN_Suffix: ''
 Step2_BGEN_Sample: '/project/ritchie02/projects/gwPheWAS/PMBB-Release-2020-2.0_genetic_imputed-topmed-r2_bgen.sample'
 Step2_BGEN_Allele_Order: 'ref-first'

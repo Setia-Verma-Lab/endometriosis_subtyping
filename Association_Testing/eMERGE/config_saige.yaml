@@ -7,7 +7,7 @@ saige_cohorts: ['eMERGE_AFR', 'eMERGE_EUR', 'eMERGE_ASIAN']
 
 # Lists of phenotypes and covariates to use
 quant_phenos: []
-bin_phenos: ['endometriosis', 'cluster_vs_controls_0', 'cluster_vs_controls_1', 'cluster_vs_controls_2', 'cluster_vs_controls_3', 'cluster_vs_controls_4']
+bin_phenos: ['endometriosis', 'cluster_vs_controls_1', 'cluster_vs_controls_2', 'cluster_vs_controls_3', 'cluster_vs_controls_4', 'cluster_vs_controls_5']
 cat_covars: ['site_27', 'site_52'] # categorical
 cont_covars: ['PC1', 'PC2', 'PC3', 'PC4']
 

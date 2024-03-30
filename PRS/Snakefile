@@ -1,0 +1,115 @@
+rule all:
+    input:
+        'all_endo_scores.csv'
+
+rule make_score_file:
+    output:
+        score='Rahmioglu_score_file.tsv'
+    input:
+        bed='../Locus_Extraction/Rahmioglu_snps_b38.bed',
+        signals='../Locus_Extraction/Rahmioglu_processed_signals.csv',
+        pmbb='../Locus_Extraction/Merged/endo_loci.PMBB.b38.bim'
+    run:
+        import pandas as pd
+
+        bed = pd.read_table(input.bed, header=None, index_col=3)
+        bed['chr:pos'] = bed[0] + ':' + bed[1].astype(str)
+        print(bed)
+        signals = pd.read_csv(input.signals, index_col='Lead SNP')
+        signals = signals[~signals.index.isin(['rs3783521', 'rs1250242'])]
+
+        signals['chr:pos'] = bed['chr:pos'].reindex(signals.index)
+        signals['chr:pos:allele'] = signals['chr:pos'] + ':' + signals['Risk_Allele']
+        signals = signals.reset_index().set_index('chr:pos:allele')
+        print(signals)
+        pmbb = pd.read_table(input.pmbb, header=None)
+        pmbb['chr:pos:ref'] = pmbb[1].str.split(':', expand=True).apply(lambda x: ':'.join([x[0], x[1], x[2]]), axis=1)
+        pmbb['chr:pos:alt'] = pmbb[1].str.split(':', expand=True).apply(lambda x: ':'.join([x[0], x[1], x[3]]), axis=1)
+
+        pmbb_ref = pmbb.copy().set_index('chr:pos:ref')
+        pmbb_alt = pmbb.copy().set_index('chr:pos:alt')
+
+        ref_match = signals.index.intersection(pmbb_ref.index)
+        alt_match = signals.index.intersection(pmbb_alt.index)
+
+        print(f'Ref Match: {len(ref_match)}, Alt Match: {len(alt_match)}')
+
+        signals.loc[ref_match, 'PMBB_Var_ID'] = pmbb_ref.loc[ref_match, 1]
+        print(signals['PMBB_Var_ID'].count())
+        signals.loc[alt_match, 'PMBB_Var_ID'] = pmbb_alt.loc[alt_match, 1]
+        print(signals['PMBB_Var_ID'].count())
+
+        signals = signals[signals.index.isin(ref_match) | signals.index.isin(alt_match)]
+        print(signals.columns)
+        score_cols = ['PMBB_Var_ID', 'Risk_Allele', 'Overall_BETA']
+
+        out_df = signals[score_cols].copy()
+        out_df = out_df.rename(columns={'PMBB_Var_ID': 'SNP', 'Risk_Allele': 'ALLELE', 'Overall_BETA': 'Endo_SCORE'})
+        print(out_df)
+
+        out_df.to_csv(output.score, sep='\t', index=False)
+
+rule make_score_samples:
+    output:
+        'Apply_PRS/score_samples.txt'
+    input:
+        '../Feature_Extraction/cluster_phenotypes_multi_ancestry.csv'
+    shell:
+        """
+        cut -d , -f1 {input} | sed 's|UKBB||g' | sed 's|eMERGE||g' > {output}
+        """
+
+rule compute_scores:
+    output:
+        'Apply_PRS/Scores/prs_{dataset}.sscore'
+    input:
+        samples='Apply_PRS/score_samples.txt',
+        score='Rahmioglu_score_file.tsv',
+        plink_set=lambda wildcards: expand('../Locus_Extraction/Merged/endo_loci.' + wildcards.dataset + '.' + ('lifted_' if wildcards.dataset != 'PMBB' else '') + 'b38{ext}', ext=['.bed', '.bim', '.fam'])
+    params:
+        plink_prefix=lambda wildcards: '../Locus_Extraction/Merged/endo_loci.' + wildcards.dataset + '.' + ('lifted_' if wildcards.dataset != 'PMBB' else '') + 'b38',
+        colnums='3',
+        plink_flag='--bfile',
+        out_prefix='Apply_PRS/Scores/prs_{dataset}'
+    envmodules:
+        'plink/2.0-20210505'
+    threads: 4
+    resources:
+        mem_mb=16000
+    shell:
+        """
+        plink2 --score {input.score} header-read center cols=+scoresums,+denom,+scoreavgs \
+          --score-col-nums {params.colnums} \
+          --keep-fam {input.samples} \
+          {params.plink_flag} {params.plink_prefix} \
+          --out {params.out_prefix}
+
+        touch {output}
+        """
+
+rule collect_all_scores:
+    output:
+        scores='all_endo_scores.csv'
+    input:
+        pmbb='Apply_PRS/Scores/prs_PMBB.sscore',
+        UKBB='Apply_PRS/Scores/prs_UKBB.sscore',
+        eMERGE='Apply_PRS/Scores/prs_eMERGE.sscore'
+    run:
+        import pandas as pd
+
+        pmbb = pd.read_table(input.pmbb, index_col='IID')
+        print(pmbb)
+
+        eMERGE = pd.read_table(input.eMERGE)
+        eMERGE['IID'] = 'eMERGE' + eMERGE['IID'].astype(str)
+        eMERGE = eMERGE.set_index('IID')
+        print(eMERGE)
+
+        UKBB = pd.read_table(input.UKBB)
+        UKBB['IID'] = 'UKBB' + UKBB['IID'].astype(str)
+        UKBB = UKBB.set_index('IID')
+        print(UKBB)
+
+        all = pd.concat([pmbb, eMERGE, UKBB])
+        print(all)
+        all.to_csv(output.scores)
