@@ -2,7 +2,8 @@
 rule all:
     input:
         expand('{dataset}/{dataset}_{ancestry}/sample_list.txt', dataset=['PMBB', 'UKBB', 'eMERGE'], ancestry=['EUR', 'AFR', 'ASIAN']),
-        'all_sample_sizes.csv'
+        'all_sample_sizes.csv',
+        '../Manuscript_Tables/table_1_datasets.csv'
 
 rule set_up_dataset_cohorts:
     output:
@@ -118,3 +119,105 @@ rule make_sample_sizes:
         print(sum)
         print(sum.sum(axis=0))
         sum.to_csv(output.counts)
+
+rule make_table_counts:
+    output:
+        table1='../Manuscript_Tables/table_1_datasets.csv',
+        table2='../Manuscript_Tables/table_2_clusters.csv'
+    input:
+        pheno_file='../Feature_Extraction/cluster_phenotypes_multi_ancestry.csv',
+        aou_counts='AOU/AOU_case_counts.csv',
+        full_pmbb_pheno='../Cluster_Training/Pheno/FULL_PMBB_pheno_covars.csv',
+        training_clusters='../Cluster_Training/Data/NG_PMBB_clusters.csv',
+        cluster_input='../Cluster_Training/Data/non_genotyped_PMBB_data_for_no_snps_clustering.csv'
+    run:
+        import pandas as pd
+        import numpy as np
+        import sys
+
+        pheno = pd.read_csv(input.pheno_file, index_col='IID')
+        pheno = pheno[pheno['ANCESTRY'].isin(['AFR', 'EUR'])]
+
+        full_pheno = pd.read_csv(input.full_pmbb_pheno, index_col='PMBB_ID')
+        cluster_data = pd.read_csv(input.cluster_input, index_col='IID')
+        full_pheno = full_pheno.loc[cluster_data.index]
+
+        cluster = pd.read_csv(input.training_clusters, index_col='IID')
+        full_pheno['Cluster'] = cluster.loc[full_pheno.index, 'Cluster'].astype(int)
+
+        mean_ages = pheno.groupby(['Dataset', 'endometriosis'])['CURRENT_AGE'].mean()
+        mean_ages.loc[('AOU', 0.0)] = 56.838652
+        mean_ages.loc[('AOU', 1.0)] = 52.230931
+
+        std_ages = pheno.groupby(['Dataset', 'endometriosis'])['CURRENT_AGE'].std()
+        std_ages.loc[('AOU', 0.0)] = 16.791040
+        std_ages.loc[('AOU', 1.0)] = 12.828262
+
+        afr_cc = pheno[pheno['ANCESTRY'] == 'AFR'].groupby(['Dataset', 'endometriosis'])['CURRENT_AGE'].count()
+        afr_cc.loc[('AOU', 0.0)] = 31435
+        afr_cc.loc[('AOU', 1.0)] = 542
+
+        eur_cc = pheno[pheno['ANCESTRY'] == 'EUR'].groupby(['Dataset', 'endometriosis'])['CURRENT_AGE'].count()
+        eur_cc.loc[('AOU', 0.0)] = 76664
+        eur_cc.loc[('AOU', 1.0)] = 1584
+
+        aou = pd.read_csv(input.aou_counts, index_col=0)
+        aou.index.name = 'PHENO'
+        aou = aou.sum()
+        aou.name = 'AOU'
+
+        phenos = [f'cluster_vs_controls_{int(i)}' for i in range(1, 6)]
+        phenos.append('endometriosis')
+
+        training = full_pheno['Cluster'].value_counts().sort_index()
+        training.index = [f'cluster_vs_controls_{i}' for i in training.index]
+        training.name = 'PMBB-TRAIN'
+        training.loc['endometriosis'] = len(full_pheno)
+        print(training)
+
+        ukbb = pheno[pheno['Dataset'] == 'UKBB'][phenos].sum()
+        ukbb.name = 'UKBB'
+        pmbb = pheno[pheno['Dataset'] == 'PMBB'][phenos].sum()
+        pmbb.name = 'PMBB'
+        emerge = pheno[pheno['Dataset'] == 'eMERGE'][phenos].sum()
+        emerge.name = 'eMERGE'
+
+        all = [training, aou, emerge, pmbb, ukbb]
+
+        table_2 = pd.concat(all, axis=1).transpose().astype(int)
+        table_2.to_csv(output.table2)
+        print(table_2)
+
+        table_1 = pd.DataFrame(index=pd.MultiIndex.from_product([table_2.index, [0, 1]]), columns=['AFR', 'EUR', 'Total', 'AGE-mean', 'AGE-std'])
+        table_1 = table_1.drop(('PMBB-TRAIN', 0))
+        table_1['AGE-mean'] = mean_ages
+        table_1['AGE-std'] = std_ages
+        table_1['AFR'] = afr_cc
+        table_1['EUR'] = eur_cc
+        table_1['Total'] = table_1['AFR'] + table_1['EUR']
+
+        mean_product = table_1['AGE-mean'] * table_1['Total']
+        print(mean_product.sum())
+        sd_product = table_1['AGE-std']**2 * table_1['Total']
+        print(sd_product.sum())
+        print(table_1['Total'].sum())
+
+        cont_mask = table_1.index[table_1.index.get_level_values(1) == 0]
+        case_mask = table_1.index[table_1.index.get_level_values(1) == 1]
+
+        table_1.loc[('ALL', 0), ['AGE-mean']] = (table_1.loc[cont_mask]['AGE-mean'] * table_1.loc[cont_mask]['Total']).sum() / table_1.loc[cont_mask]['Total'].sum()
+        table_1.loc[('ALL', 0), ['AGE-std']] = np.sqrt(((table_1.loc[cont_mask]['AGE-std']**2) * table_1.loc[cont_mask]['Total']).sum() / table_1.loc[cont_mask]['Total'].sum())
+        table_1.loc[('ALL', 0), ['AFR', 'EUR', 'Total']] = table_1.loc[cont_mask][['AFR', 'EUR', 'Total']].sum()
+
+        table_1.loc[('ALL', 1), ['AGE-mean']] = (table_1.loc[case_mask]['AGE-mean'] * table_1.loc[case_mask]['Total']).sum() / table_1.loc[case_mask]['Total'].sum()
+        table_1.loc[('ALL', 1), ['AGE-std']] = np.sqrt(((table_1.loc[case_mask]['AGE-std']**2) * table_1.loc[case_mask]['Total']).sum() / table_1.loc[case_mask]['Total'].sum())
+        table_1.loc[('ALL', 1), ['AFR', 'EUR', 'Total']] = table_1.loc[case_mask][['AFR', 'EUR', 'Total']].sum()
+
+
+        table_1.loc[('PMBB-TRAIN', 1), ['Total', 'AGE-mean', 'AGE-std']] = [len(full_pheno), full_pheno['DATA_PULL_AGE'].mean(), full_pheno['DATA_PULL_AGE'].std()]
+        table_1['CT-fmt'] = table_1.apply(lambda x: f'{x["Total"]:,} ({x["AFR"]:,} / {x["EUR"]:,})'.replace('.0', ''), axis=1)
+        table_1['AGE-fmt'] = table_1.apply(lambda x: f'{x["AGE-mean"]:.1f} ({x["AGE-std"]:.1f})', axis=1)
+        table_1.index.names = ['DATASET', 'Endometriosis']
+
+        print(table_1)
+        table_1.to_csv(output.table1)
