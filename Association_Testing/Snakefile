@@ -185,8 +185,25 @@ rule make_table_counts:
         all = [training, aou, emerge, pmbb, ukbb]
 
         table_2 = pd.concat(all, axis=1).transpose().astype(int)
-        table_2.to_csv(output.table2)
-        print(table_2)
+        table_2.loc['ALL'] = table_2.drop(index='PMBB-TRAIN').sum()
+
+        table_2_props = table_2.drop(columns='endometriosis').apply(lambda x: x / x.sum(), axis=1)
+
+        need_rows, need_cols = table_2_props.index, table_2_props.columns
+
+        table_2_fmt = table_2.loc[need_rows, need_cols].applymap(lambda x: f'{x:,}') + ' (' + table_2_props.applymap(lambda x: f'{x*100:.1f}') + '%)'
+        table_2_fmt['Total'] = table_2['endometriosis'].apply(lambda x: f'{x:,}')
+        print(table_2_fmt)
+
+        pheno_map = {'cluster_vs_controls_1': '1: pain comorbidities',
+                     'cluster_vs_controls_2': '2: uterine disorders',
+                     'cluster_vs_controls_3': '3: pregnancy complications',
+                     'cluster_vs_controls_4': '4: cardiometabolic comorbidities',
+                     'cluster_vs_controls_5': '5: EHR-asymptomatic'}
+
+        table_2_fmt.index.name = 'DATASET'
+        table_2_fmt = table_2_fmt.rename(columns=pheno_map)
+        table_2_fmt.to_csv(output.table2)
 
         table_1 = pd.DataFrame(index=pd.MultiIndex.from_product([table_2.index, [0, 1]]), columns=['AFR', 'EUR', 'Total', 'AGE-mean', 'AGE-std'])
         table_1 = table_1.drop(('PMBB-TRAIN', 0))
@@ -197,10 +214,7 @@ rule make_table_counts:
         table_1['Total'] = table_1['AFR'] + table_1['EUR']
 
         mean_product = table_1['AGE-mean'] * table_1['Total']
-        print(mean_product.sum())
         sd_product = table_1['AGE-std']**2 * table_1['Total']
-        print(sd_product.sum())
-        print(table_1['Total'].sum())
 
         cont_mask = table_1.index[table_1.index.get_level_values(1) == 0]
         case_mask = table_1.index[table_1.index.get_level_values(1) == 1]
