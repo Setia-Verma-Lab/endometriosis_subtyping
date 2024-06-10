@@ -1,0 +1,42 @@
+include: '/home/guarelin/snakemake_workflows/biofilter_wrapper/Snakefile'
+
+rule make_biofilter_input:
+    output:
+        'Annotations/rahm_biofilter_input_positions.txt'
+    input:
+        'GCST90269970_buildGRCh37.tsv.gz'
+    shell:
+        """
+        zcat {input} | awk '{{ if ($6<1E-5) {{print $1, $1":"$2, $2}}}}' | tail -n +2 > {output}
+        """
+
+rule make_endo_2023_manhattan_plot:
+    output:
+        manhattan='Plots/Rahm_manhattan_plot.png'
+    input:
+        sumstats='GCST90269970_buildGRCh37.tsv.gz',
+        # annot='Annotations/rahm_biofilter_genes_rsids.csv'
+    run:
+        import pandas as pd
+        from manhattan_plot import ManhattanPlot
+
+        # annot_df = pd.read_csv(input.annot)
+        # annot_df['ID'] = annot_df['Gene']
+        # print(annot_df)
+
+        mp = ManhattanPlot(input.sumstats, title='2023 ENDOMETRIOSIS GWAS (Nature Genetics)')
+        mp.load_data()
+        mp.df['ID'] = mp.df['chromosome'].astype(str) + ':' + mp.df['base_pair_location'].astype(str)
+        mp.clean_data({'chromosome': '#CHROM', 'base_pair_location': 'POS', 'p_value': 'P'})
+        # mp.add_annotations(annot_df)
+        mp.get_thinned_data()
+        print(mp.thinned)
+
+        mp.DARK_CHR_COLOR='dimgray'
+        mp.LIGHT_CHR_COLOR='lightgray'
+        mp.NOVEL_HIT_COLOR='navy'
+        mp.FIFTH_COLOR='lightblue'
+
+        mp.update_plotting_parameters(sig=5E-8, merge_genes=True,
+            ld_block=5E5, vertical=False, annot_thresh=5E-8)
+        mp.full_plot(save=output.manhattan, rep_boost=False, with_table=False)

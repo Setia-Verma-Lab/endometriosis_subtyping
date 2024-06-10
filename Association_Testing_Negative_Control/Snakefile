@@ -2,8 +2,8 @@
 rule all:
     input:
         expand('{dataset}/{dataset}_{ancestry}/sample_list.txt', dataset=['PMBB', 'UKBB', 'eMERGE'], ancestry=['EUR', 'AFR', 'ASIAN']),
-        'all_sample_sizes.csv',
-        '../Manuscript_Tables/table_1_datasets.csv'
+        # expand('{dataset}/{dataset}_{ancestry}/sample_list.txt', dataset=['PMBB'], ancestry=['EUR', 'AFR', 'ASIAN']),
+        # 'all_sample_sizes.csv'
 
 rule set_up_dataset_cohorts:
     output:
@@ -13,6 +13,7 @@ rule set_up_dataset_cohorts:
         master_pheno='../Feature_Extraction/cluster_phenotypes_multi_ancestry.csv'
     run:
         import pandas as pd
+        import numpy as np
 
         pheno = pd.read_csv(input.master_pheno, index_col='IID')
         pheno = pheno[pheno['Dataset'] == wildcards.dataset]
@@ -50,7 +51,7 @@ rule set_up_dataset_cohorts:
             need_cols.extend([f'PC{i+1}' for i in range(10)])
         elif wildcards.dataset == 'PMBB':
             pc_file = '/project/PMBB/PMBB-Release-2020-2.0/Genotype/PCA/PMBB-Release-2020-2.0_genetic_genotype.eigenvec'
-            genetic_data_samples = pd.read_table('/project/ritchie02/projects/gwPheWAS/PMBB-Release-2020-2.0_genetic_imputed-topmed-r2_bgen.sample', dtype=str)['ID_1']
+            genetic_data_samples = pd.read_table('/project/PMBB/PMBB-Release-2020-2.0/Imputed/bgen/PMBB-Release-2020-2.0_genetic_imputed-topmed-r2_bgen.sample', dtype=str)['ID_1']
             pc_file_index_col = 'PMBB_ID'
             need_cols = [pc_file_index_col]
             need_cols.extend([f'PC{i+1}' for i in range(10)])
@@ -66,7 +67,29 @@ rule set_up_dataset_cohorts:
         print(len(output_pheno))
         output_pheno = output_pheno.loc[output_pheno.index.intersection(genetic_data_samples)]
         print(len(output_pheno), 'after dropping samples not in the genetic data files we need')
-        print(output_pheno[pheno_cols].apply(lambda x: x.value_counts()).transpose())
+
+        cluster_phenos = [c for c in output_pheno.columns if 'cluster_vs' in c]
+        cluster_counts = output_pheno[cluster_phenos].sum().astype(int)
+
+        print('Previous Case Counts:')
+        print(cluster_counts)
+        cluster_groups = {}
+        all_cases = output_pheno.index[output_pheno['endometriosis'] == 1]
+        used_cases = []
+
+        np.random.seed(314159)
+        for pheno, count in cluster_counts.items():
+            sample_cases = [c for c in all_cases if c not in used_cases]
+            random_cases = np.random.choice(sample_cases, size=count, replace=False)
+            used_cases.extend(random_cases)
+            cluster_groups[pheno] = random_cases
+
+        output_pheno.loc[all_cases, cluster_phenos] = np.nan
+        for pheno, case_list in cluster_groups.items():
+            output_pheno.loc[case_list, pheno] = 1
+
+        print('Random Case Counts:')
+        print(output_pheno[cluster_phenos].sum().astype(int))
 
         pc_df = pd.read_table(pc_file, index_col=pc_file_index_col, dtype={pc_file_index_col: str}, usecols=need_cols)
         pc_df = pc_df.rename(columns=col_map)
@@ -77,7 +100,12 @@ rule set_up_dataset_cohorts:
 
         print(output_pheno)
         output_pheno.to_csv(output.pheno, sep='\t')
-        open(output.samples, 'w+').write('\n'.join(output_pheno.index))
+        samples = open(output.samples, 'w+')
+        if wildcards.dataset == 'eMERGE':
+            samples.write('\n'.join(output_pheno.index))
+        else:
+            samples.write('\n'.join([f'{id} {id}' for id in output_pheno.index]))
+        samples.close()
 
 rule make_sample_sizes:
     output:

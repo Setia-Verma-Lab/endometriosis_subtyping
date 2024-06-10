@@ -1,0 +1,143 @@
+include: '/project/ssverma_shared/tools/lindsay_snakemake_workflows/saige_gwas_bgen/Snakefile'
+include: '/project/ssverma_shared/tools/lindsay_snakemake_workflows/biofilter_wrapper/Snakefile'
+
+import pandas as pd
+
+def get_actual_all_list(sample_table):
+    df = pd.read_csv(sample_table)
+    df = df[df['N_CASES'] >= 30]
+    print(len(df))
+
+    df['SS_FILENAME'] = df['COHORT'] + '/Sumstats/' + df['OUTCOME'] + '.saige.gz'
+
+    all_files = df['SS_FILENAME'].to_list()
+    return all_files
+
+rule all:
+    input:
+        get_actual_all_list('sample_size_table.csv')
+
+rule make_sample_size_table:
+    input:
+        pheno=expand('eMERGE_{ancestry}/saige_pheno_covars.txt', ancestry=['AFR', 'EUR', 'ASIAN'])
+    output:
+        samples='sample_size_table.csv',
+        full_samples='unfiltered_sample_size_table.csv'
+    resources: mem_mb=5000
+    run:
+        import pandas as pd
+        import numpy as np
+
+        dfs = []
+
+        outcomes = config['bin_phenos']
+
+        for f in input:
+            temp = pd.read_table(f, index_col='IID')
+            temp_counts = temp[outcomes].apply(lambda x: x.value_counts(), result_type='expand')
+            temp_counts = temp_counts.transpose()
+            temp_counts.index.name = 'OUTCOME'
+            temp_counts['COHORT'] = f.split('/')[0]
+            temp_counts = temp_counts.reset_index()
+            temp_counts = temp_counts.rename(columns={0: 'N_CONTROLS', 1: 'N_CASES'})
+            dfs.append(temp_counts)
+
+        results = pd.concat(dfs)
+        results[['DATASET', 'ANCESTRY']] = results['COHORT'].str.split('_', expand=True)
+        print(results)
+
+        results.to_csv(output.full_samples, index=False)
+
+        results = results[results['N_CASES'] >= 30]
+        print(results)
+
+        results.to_csv(output.samples, index=False)
+
+rule make_chr_eMERGE_endo_bfiles:
+    output:
+        plink_set=expand('Endo_Loci_eMERGE/subset.{{chr}}{ext}', ext=['.bed', '.bim', '.fam'])
+    input:
+        plink_set=expand('/project/ritchie/datasets/eMERGE/eMERGE_III_Imputed_UW/V2_wHarvard/eMERGE_Info_QC/subset.{{chr}}{ext}', ext=['.bed', '.bim', '.fam']),
+        extract_range='../../1KG_LD_Testing/Rahmioglu_tag_snps_b37.bed'
+    params:
+        plink_prefix='/project/ritchie/datasets/eMERGE/eMERGE_III_Imputed_UW/V2_wHarvard/eMERGE_Info_QC/subset.{chr}',
+        output_prefix='Endo_Loci_eMERGE/subset.{chr}'
+    envmodules: 'plink/2.0-20210505'
+    shell:
+        """
+        plink --make-bed \
+          --bfile {params.plink_prefix} \
+          --extract range {input.extract_range} \
+          --out {params.output_prefix} \
+        """
+
+rule make_chr_eMERGE_endo_pfiles:
+    output:
+        plink_set=expand('Endo_Loci_eMERGE/subset.{{chr}}{ext}', ext=['.pgen', '.pvar', '.no_fid.psam'])
+    input:
+        plink_set=expand('/project/ritchie/datasets/eMERGE/eMERGE_1_2_3_Imputation_v3/Plink_files_by_chr/chr{{chr}}.dose.emerge_ids.consented.merged{ext}', ext=['.pgen', '.pvar', '.psam']),
+        extract_range='../../1KG_LD_Testing/Rahmioglu_tag_snps_b37.bed'
+    params:
+        plink_prefix='/project/ritchie/datasets/eMERGE/eMERGE_1_2_3_Imputation_v3/Plink_files_by_chr/chr{chr}.dose.emerge_ids.consented.merged',
+        output_prefix='Endo_Loci_eMERGE/subset.{chr}'
+    envmodules: 'plink/2.0-20210505'
+    shell:
+        """
+        plink --make-pgen erase-phase \
+          --pfile {params.plink_prefix} \
+          --set-all-var-ids @:#:\\$r:\\$a \
+          --extract range {input.extract_range} \
+          --out {params.output_prefix}
+        mv {params.output_prefix}.psam {params.output_prefix}.no_fid.psam
+        """
+
+rule fix_chr_eMERGE_endo_psam:
+    output:
+        psam='Endo_Loci_eMERGE/subset.{chr}.psam'
+    input:
+        bad_psam='Endo_Loci_eMERGE/subset.{chr}.no_fid.psam'
+    run:
+        import pandas as pd
+
+        header_seen = False
+        out = open(output.psam, 'w+')
+        for line in open(input.bad_psam, 'r').read().splitlines():
+            if not header_seen:
+                if '#IID' in line:
+                    header_seen = True
+                    new_line = '#FID\tIID\tSEX'
+                    out.write(new_line + '\n')
+                else:
+                    out.write(line + '\n')
+            else:
+                line_parts = line.split()
+                new_line = '\t'.join([line_parts[0], line_parts[0], line_parts[1]])
+                out.write(new_line + '\n')
+
+rule make_chr_eMERGE_endo_bgen:
+    output:
+        plink_set=expand('Endo_Loci_eMERGE/subset.{{chr}}{ext}', ext=['.bgen', '.sample'])
+    input:
+        plink_set=expand('Endo_Loci_eMERGE/subset.{{chr}}{ext}', ext=['.pgen', '.pvar', '.psam']),
+        extract_range='../../1KG_LD_Testing/Rahmioglu_tag_snps_b37.bed'
+    params:
+        plink_prefix='Endo_Loci_eMERGE/subset.{chr}',
+        output_prefix='Endo_Loci_eMERGE/subset.{chr}'
+    envmodules: 'plink/2.0-20210505'
+    shell:
+        """
+        plink --export bgen-1.2 bits=8 \
+          --pfile {params.plink_prefix} \
+          --out {params.output_prefix} \
+        """
+
+rule make_chr_eMERGE_endo_bgi:
+    output:
+        bgi='Endo_Loci_eMERGE/subset.{chr}.bgen.bgi'
+    input:
+        bgen='Endo_Loci_eMERGE/subset.{chr}.bgen'
+    envmodules: 'BGEN/1.1.4', 'gcc'
+    shell:
+        """
+        bgenix -index -g {input.bgen}
+        """

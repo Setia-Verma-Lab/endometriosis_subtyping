@@ -3,11 +3,12 @@ import os
 rule all:
     input:
         expand('SNP_Lists/{dataset}_to_PMBB_ID_map.txt', dataset=['eMERGE', 'UKBB', 'AOU'])
+
 def get_sumstats(dataset):
     files = []
 
     if dataset == 'UKBB':
-        for a in ['AFR', 'EUR', 'ASIAN']:
+        for a in ['AFR', 'EUR']:
             dir = f'UKBB_{a}/Sumstats/'
             files.extend([dir + f for f in os.listdir(dir)])
     elif dataset == 'eMERGE':
@@ -15,11 +16,11 @@ def get_sumstats(dataset):
             dir = f'eMERGE_{a}/Sumstats/'
             files.extend([dir + f for f in os.listdir(dir)])
     elif dataset == 'PMBB':
-        for a in ['AFR', 'EUR', 'ASIAN']:
+        for a in ['AFR', 'EUR']:
             dir = f'PMBB_{a}/Sumstats/'
             files.extend([dir + f for f in os.listdir(dir)])
     elif dataset == 'AOU':
-        for a in ['AFR', 'EUR', 'ASIAN']:
+        for a in ['AFR', 'EUR']:
             dir = f'AOU_{a}/Sumstats/'
             files.extend([dir + f for f in os.listdir(dir)])
 

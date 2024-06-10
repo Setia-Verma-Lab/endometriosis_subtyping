@@ -1,0 +1,79 @@
+include: '/project/ssverma_shared/tools/lindsay_snakemake_workflows/saige_gwas_bgen/Snakefile'
+include: '/project/ssverma_shared/tools/lindsay_snakemake_workflows/biofilter_wrapper/Snakefile'
+
+import pandas as pd
+
+def get_actual_all_list(sample_table):
+    df = pd.read_csv(sample_table)
+    df = df[df['N_CASES'] >= 30]
+    print(len(df))
+
+    df['SS_FILENAME'] = df['COHORT'] + '/Sumstats/' + df['OUTCOME'] + '.saige.gz'
+    df['SS_LINKNAME'] = 'Symlinked_Results/PMBB.Guare.' + df['OUTCOME'] + '.' + df['COHORT'].str.split('_', expand=True)[[1, 0]].apply(lambda x: '.'.join(x), axis=1) + '.SAIGE.20230926.txt.gz'
+    df['PLOT_FILENAME'] = 'Plots/manhattan.' + df['COHORT'] + '.' + df['OUTCOME'] + '.png'
+
+    all_files = df['SS_FILENAME'].to_list()
+    # all_files.extend(df['PLOT_FILENAME'].to_list())
+    # all_files.extend(df['SS_LINKNAME'].to_list())
+    return all_files
+
+rule all:
+    input:
+        get_actual_all_list('sample_size_table.csv')
+
+
+rule make_sample_size_table:
+    input:
+        pheno=expand('UKBB_{ancestry}/saige_pheno_covars.txt', ancestry=['AFR', 'EUR', 'ASIAN'])
+    output:
+        samples='sample_size_table.csv',
+        full_samples='unfiltered_sample_size_table.csv'
+    resources: mem_mb=5000
+    run:
+        import pandas as pd
+        import numpy as np
+
+        dfs = []
+
+        outcomes = config['bin_phenos']
+
+        for f in input:
+            temp = pd.read_table(f, index_col='IID')
+            temp_counts = temp[outcomes].apply(lambda x: x.value_counts(), result_type='expand')
+            temp_counts = temp_counts.transpose()
+            temp_counts.index.name = 'OUTCOME'
+            temp_counts['COHORT'] = f.split('/')[0]
+            temp_counts = temp_counts.reset_index()
+            temp_counts = temp_counts.rename(columns={0: 'N_CONTROLS', 1: 'N_CASES'})
+            dfs.append(temp_counts)
+
+        results = pd.concat(dfs)
+        results[['DATASET', 'ANCESTRY']] = results['COHORT'].str.split('_', expand=True)
+        print(results)
+
+        results.to_csv(output.full_samples, index=False)
+
+        results = results[results['N_CASES'] >= 30]
+        print(results)
+
+        results.to_csv(output.samples, index=False)
+
+rule make_chr_UKBB_endo_pgen:
+    output:
+        plink_set=expand('Endo_Loci_UKBB/subset.{{chr}}{ext}', ext=['.pgen', '.pvar', '.psam'])
+    input:
+        plink_set=expand('/project/ritchie/datasets/UKBiobank/Common_Var_Plink/Plink-2.0-Dedup/subset.{{chr}}{ext}', ext=['.pgen', '.pvar', '.psam']),
+        extract_range='../../1KG_LD_Testing/Rahmioglu_tag_snps_b37.bed'
+    params:
+        plink_prefix='/project/ritchie/datasets/UKBiobank/Common_Var_Plink/Plink-2.0-Dedup/subset.{chr}',
+        output_prefix='Endo_Loci_UKBB/subset.{chr}'
+    envmodules: 'plink/2.0-20210505'
+    resources: mem_mb=20000
+    shell:
+        """
+        plink --make-pgen \
+          --pfile {params.plink_prefix} \
+          --extract range {input.extract_range} \
+          --memory 19000 \
+          --out {params.output_prefix} \
+        """

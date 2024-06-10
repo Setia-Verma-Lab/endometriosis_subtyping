@@ -1,0 +1,47 @@
+# Chromosomes to use for GWAS
+chromosomes: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 19]
+
+build: '37'
+
+# Each of these will be subdirectories of your working/project directory
+saige_cohorts: ['eMERGE_AFR', 'eMERGE_EUR', 'eMERGE_ASIAN']
+sex_strat_cohorts: [] # for use when defining different covariates in sex-stratified cohorts
+
+# Lists of phenotypes and covariates to use
+quant_phenos: []
+bin_phenos: ['endometriosis', 'cluster_vs_controls_1', 'cluster_vs_controls_2', 'cluster_vs_controls_3', 'cluster_vs_controls_4', 'cluster_vs_controls_5']
+cat_covars: ['site_27', 'site_49', 'site_52', 'site_68', 'site_74'] # categorical
+cont_covars: ['CURRENT_AGE', 'PC1', 'PC2', 'PC3', 'PC4']
+
+sex_strat_covars: # for use when defining different covariates in sex-stratified cohorts
+    cat_covars: [ ] # categorical
+    cont_covars: [ ]
+
+# Genotype fileset
+QC_Plink_Flag: '--bfile'
+QC_Plink_Prefix: '/project/ritchie/datasets/eMERGE/eMERGE_III_Imputed_UW/V2_wHarvard/eMERGE_Geno/eMERGE_High_Rsq'
+QC_Plink_Extensions: ['.bed', '.bim', '.fam']
+
+# BGEN file sets
+Step2_BGEN_Prefix: 'Endo_Loci_eMERGE/subset.'
+Step2_BGEN_Suffix: ''
+Step2_BGEN_Sample: 'Endo_Loci_eMERGE/subset.1.sample'
+Step2_BGEN_Allele_Order: 'ref-first'
+
+# Plink2 filesets used to create SNP lists
+Step2_PGEN_Prefix: 'Endo_Loci_eMERGE/subset.'
+Step2_PGEN_Suffix: ''
+
+# Some bgen datasets have "chr22" and some have just "22" which can mess with SAIGE being able to find variants
+# For PMBB, this value is True. For UKBB and eMERGE, this value is False
+CHR_has_chr_prefix: False
+CHR_has_leading_0: False
+
+# Step 2 Options
+min_mac: '20'
+min_info: '0.4'
+
+# Merge Options - map SAIGE columns to column names that you want. Add/remove key/value pairs as needed
+col_names:
+    MarkerID: 'ID'
+    p.value: 'P'

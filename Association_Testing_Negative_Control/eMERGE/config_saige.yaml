@@ -1,0 +1,37 @@
+# Chromosomes to use for GWAS
+build: '37'
+chromosomes: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 19]
+
+# Each of these will be subdirectories of your working/project directory
+saige_cohorts: ['eMERGE_AFR', 'eMERGE_EUR', 'eMERGE_ASIAN']
+
+# Lists of phenotypes and covariates to use
+quant_phenos: []
+bin_phenos: ['endometriosis', 'cluster_vs_controls_1', 'cluster_vs_controls_2', 'cluster_vs_controls_3', 'cluster_vs_controls_4', 'cluster_vs_controls_5']
+cat_covars: ['site_27', 'site_52'] # categorical
+cont_covars: ['PC1', 'PC2', 'PC3', 'PC4']
+
+sex_strat_cohorts: []
+
+sex_strat_covars:
+    cat_covars: []
+    cont_covars: []
+
+# Plink info for Pre-Step 1 QC: flag can be --pfile or --bfile
+QC_Plink_Flag: '--bfile'
+QC_Plink_Prefix: '/project/ritchie/datasets/eMERGE/eMERGE_III_Imputed_UW/V2_wHarvard/eMERGE_Geno/eMERGE_High_Rsq'
+QC_Plink_Extensions: ['.bed', '.bim', '.fam']
+
+# Plink info for Step 2: must be bed files.
+Step2_Plink_Prefix: 'Endo_Loci_eMERGE/subset.'
+Step2_Plink_Suffix: ''
+Step2_Plink_Extensions: ['.bed', '.bim', '.fam']
+
+
+# Saige Options
+min_mac: '20'
+
+# Merge Options - map SAIGE columns to column names that you want. Add/remove key/value pairs as needed
+col_names:
+    MarkerID: 'ID'
+    p.value: 'P'

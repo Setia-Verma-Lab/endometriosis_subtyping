@@ -17,6 +17,10 @@ for anc in ancestries:
         controls.loc[anc, pheno] = df['N_ctrl'].max()
         n_vars.loc[anc, pheno] = len(df)
 
+print(cases)
+print(controls)
+print(n_vars)
+
 cases.to_csv('AOU_case_counts.csv')
 controls.to_csv('AOU_control_counts.csv')
 n_vars.to_csv('AOU_variant_counts.csv')
