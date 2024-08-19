@@ -1,7 +1,7 @@
 
 rule all:
     input:
-        expand('{dataset}/{dataset}_{ancestry}/sample_list.txt', dataset=['PMBB', 'UKBB', 'eMERGE'], ancestry=['EUR', 'AFR', 'ASIAN']),
+        # expand('{dataset}/{dataset}_{ancestry}/sample_list.txt', dataset=['PMBB', 'UKBB', 'eMERGE'], ancestry=['EUR', 'AFR', 'ASIAN']),
         'all_sample_sizes.csv',
         '../Manuscript_Tables/table_1_datasets.csv'
 
@@ -85,9 +85,11 @@ rule make_sample_sizes:
         supp_table='../Manuscript_Tables/supp_table_4_sample_sizes_by_ancestry.csv'
     input:
         pheno_file='../Feature_Extraction/cluster_phenotypes_multi_ancestry.csv',
-        aou_counts='AOU/AOU_case_counts.csv'
+        aou_counts='AOU/AOU_case_counts.csv',
+        biovu_counts='BioVU/Box_Download/cluster_counts_by_ancestry.csv'
     run:
         import pandas as pd
+        import sys
 
         pheno = pd.read_csv(input.pheno_file, index_col='IID')
         print(pheno)
@@ -97,6 +99,15 @@ rule make_sample_sizes:
         print('\nAOU')
         print(aou)
 
+        biovu = pd.read_csv(input.biovu_counts, skiprows=7, index_col=0)
+        biovu_col_map = dict(zip([str(i) for i in range(1, 6)], [f'cluster_vs_controls_{i}' for i in range(1, 6)]))
+        biovu_col_map['Total'] = 'endometriosis'
+        biovu = biovu.rename(columns=biovu_col_map)
+        biovu = biovu.loc[['AFR', 'EUR']]
+        biovu.index.name = 'ANCESTRY'
+        print('\nBioVU')
+        print(biovu)
+
         phenos = [f'cluster_vs_controls_{i}' for i in range(1, 6)]
         phenos.append('endometriosis')
 
@@ -104,8 +115,8 @@ rule make_sample_sizes:
         pmbb = pheno[pheno['Dataset'] == 'PMBB'].groupby('ANCESTRY')[phenos].sum()
         emerge = pheno[pheno['Dataset'] == 'eMERGE'].groupby('ANCESTRY')[phenos].sum()
 
-        all = [aou, ukbb, pmbb, emerge]
-        names = ['AOU', 'UKBB', 'PMBB', 'eMERGE']
+        all = [aou, ukbb, pmbb, emerge, biovu]
+        names = ['AOU', 'UKBB', 'PMBB', 'eMERGE', 'BioVU']
 
         sum = pd.DataFrame().reindex_like(ukbb).fillna(0)
 
@@ -134,7 +145,10 @@ rule make_sample_sizes:
         emerge = emerge.reset_index().melt(id_vars='ANCESTRY')
         emerge['DATASET'] = 'eMERGE'
 
-        all = pd.concat([pmbb, emerge, aou, ukbb])
+        biovu = biovu.reset_index().melt(id_vars='ANCESTRY')
+        biovu['DATASET'] = 'eMERGE'
+
+        all = pd.concat([pmbb, emerge, aou, ukbb, biovu])
         all = all[all['ANCESTRY'].isin(['AFR', 'EUR'])]
         print(all)
         all.to_csv(output.supp_table, index=False)
@@ -146,6 +160,7 @@ rule make_table_counts:
     input:
         pheno_file='../Feature_Extraction/cluster_phenotypes_multi_ancestry.csv',
         aou_counts='AOU/AOU_case_counts.csv',
+        biovu_counts='BioVU/Box_Download/cluster_counts_by_ancestry.csv',
         full_pmbb_pheno='../Cluster_Training/Pheno/FULL_PMBB_pheno_covars.csv',
         training_clusters='../Cluster_Training/Data/NG_PMBB_clusters.csv',
         cluster_input='../Cluster_Training/Data/non_genotyped_PMBB_data_for_no_snps_clustering.csv'
@@ -156,6 +171,17 @@ rule make_table_counts:
 
         pheno = pd.read_csv(input.pheno_file, index_col='IID')
         pheno = pheno[pheno['ANCESTRY'].isin(['AFR', 'EUR'])]
+
+        biovu = pd.read_csv(input.biovu_counts, skiprows=7, index_col=0)
+        biovu_col_map = dict(zip([str(i) for i in range(1, 6)], [f'cluster_vs_controls_{i}' for i in range(1, 6)]))
+        biovu_col_map['Total'] = 'endometriosis'
+        biovu = biovu.rename(columns=biovu_col_map)
+        biovu = biovu.loc[['AFR', 'EUR']]
+        biovu.index.name = 'ANCESTRY'
+
+        aou = pd.read_csv(input.aou_counts, index_col=0)
+        aou.index.name = 'PHENO'
+        print(aou)
 
         full_pheno = pd.read_csv(input.full_pmbb_pheno, index_col='PMBB_ID')
         cluster_data = pd.read_csv(input.cluster_input, index_col='IID')
@@ -173,17 +199,39 @@ rule make_table_counts:
         std_ages.loc[('AOU', 1.0)] = 12.828262
 
         afr_cc = pheno[pheno['ANCESTRY'] == 'AFR'].groupby(['Dataset', 'endometriosis'])['CURRENT_AGE'].count()
-        afr_cc.loc[('AOU', 0.0)] = 31435
-        afr_cc.loc[('AOU', 1.0)] = 542
+        afr_cc.loc[('AOU', 0.0)] = 31185
+        afr_cc.loc[('AOU', 1.0)] = aou.loc['AFR', 'endometriosis']
+        afr_cc.loc[('BioVU', 0.0)] = 7131
+        afr_cc.loc[('BioVU', 1.0)] = biovu.loc['AFR', 'endometriosis']
 
         eur_cc = pheno[pheno['ANCESTRY'] == 'EUR'].groupby(['Dataset', 'endometriosis'])['CURRENT_AGE'].count()
-        eur_cc.loc[('AOU', 0.0)] = 76664
-        eur_cc.loc[('AOU', 1.0)] = 1584
+        eur_cc.loc[('AOU', 0.0)] = 75768
+        eur_cc.loc[('AOU', 1.0)] = aou.loc['EUR', 'endometriosis']
+        eur_cc.loc[('BioVU', 0.0)] = 30537
+        eur_cc.loc[('BioVU', 1.0)] = biovu.loc['EUR', 'endometriosis']
 
-        aou = pd.read_csv(input.aou_counts, index_col=0)
-        aou.index.name = 'PHENO'
-        aou = aou.sum()
-        aou.name = 'AOU'
+        afr_bv_case_age, afr_bv_case_std = 43.25483, 11.32966
+        afr_bv_cont_age, afr_bv_cont_std = 45.52227, 18.26292
+        eur_bv_case_age, eur_bv_case_std = 48.45608, 12.77753
+        eur_bv_cont_age, eur_bv_cont_std = 55.1329, 18.04099
+
+        mean_numer_temp = (afr_bv_cont_age * afr_cc.loc[('BioVU', 0)]) + (eur_bv_cont_age * eur_cc.loc[('BioVU', 0)])
+        mean_denom_temp = afr_cc.loc[('BioVU', 0)] + eur_cc.loc[('BioVU', 0)]
+        mean_ages.loc[('BioVU', 0.0)] = mean_numer_temp / mean_denom_temp
+
+        mean_numer_temp = (afr_bv_case_age * afr_cc.loc[('BioVU', 1)]) + (eur_bv_case_age * eur_cc.loc[('BioVU', 1)])
+        mean_denom_temp = afr_cc.loc[('BioVU', 1)] + eur_cc.loc[('BioVU', 1)]
+        mean_ages.loc[('BioVU', 1.0)] = mean_numer_temp / mean_denom_temp
+
+        std_numer_temp = afr_bv_cont_std ** 2 * (afr_cc.loc[('BioVU', 0)] - 1)
+        std_numer_temp += eur_bv_cont_std ** 2 * (eur_cc.loc[('BioVU', 0)] - 1)
+        std_denom_temp = afr_cc.loc[('BioVU', 0)] + eur_cc.loc[('BioVU', 0)] - 2
+        std_ages.loc[('BioVU', 0.0)] = np.sqrt(std_numer_temp / std_denom_temp)
+
+        std_numer_temp = afr_bv_case_std ** 2 * (afr_cc.loc[('BioVU', 1)] - 1)
+        std_numer_temp += eur_bv_case_std ** 2 * (eur_cc.loc[('BioVU', 1)] - 1)
+        std_denom_temp = afr_cc.loc[('BioVU', 1)] + eur_cc.loc[('BioVU', 1)] - 2
+        std_ages.loc[('BioVU', 1.0)] = np.sqrt(std_numer_temp / std_denom_temp)
 
         phenos = [f'cluster_vs_controls_{int(i)}' for i in range(1, 6)]
         phenos.append('endometriosis')
@@ -200,8 +248,12 @@ rule make_table_counts:
         pmbb.name = 'PMBB'
         emerge = pheno[pheno['Dataset'] == 'eMERGE'][phenos].sum()
         emerge.name = 'eMERGE'
+        biovu = biovu.sum()
+        biovu.name = 'BioVU'
+        aou = aou.sum()
+        aou.name = 'AOU'
 
-        all = [training, aou, emerge, pmbb, ukbb]
+        all = [training, aou, emerge, pmbb, ukbb, biovu]
 
         table_2 = pd.concat(all, axis=1).transpose().astype(int)
         table_2.loc['ALL'] = table_2.drop(index='PMBB-TRAIN').sum()

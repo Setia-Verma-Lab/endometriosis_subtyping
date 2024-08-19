@@ -1,0 +1,123 @@
+
+phenotypes = ['cluster_vs_controls_1', 'cluster_vs_controls_2', 'cluster_vs_controls_3',
+              'cluster_vs_controls_4', 'cluster_vs_controls_5', 'endometriosis']
+phenotypes_no_endo = ['cluster_vs_controls_1', 'cluster_vs_controls_2', 'cluster_vs_controls_3',
+              'cluster_vs_controls_4', 'cluster_vs_controls_5']
+
+rule all:
+    input:
+        expand('BioVU_{anc}/Sumstats/{pheno}.saige.gz', anc=['AFR', 'EUR'], pheno=phenotypes),
+        expand('../../Association_Testing_Negative_Control/BioVU/BioVU_{anc}/Sumstats/{pheno}.saige.gz', anc=['AFR', 'EUR'], pheno=phenotypes_no_endo)
+
+rule extract_positive_control_sumstats:
+    output:
+        subset='BioVU_{anc}/Sumstats/endometriosis.saige.gz'
+    input:
+        sumstats='/project/ssverma_shared/projects/Endometriosis/Endo_GBMI/Meta_Analyses/BioVU_{anc}/Sumstats/W.munged.gz',
+        bed='/project/ssverma_shared/projects/Endometriosis/Endo_Subtyping_Heterogeneity/1KG_LD_Testing/Rahmioglu_tag_snps_b38.bed'
+    resources: mem_mb=15000
+    run:
+        import pandas as pd
+        import numpy as np
+        from scipy.stats import norm
+
+        bed = pd.read_table(input.bed, header=None)
+        bed['CHR'] = bed[0].str.replace('chr', '').astype(int)
+        bed = bed.set_index(['CHR', 1])
+        print(bed)
+
+        dfs = []
+        for chunk in pd.read_table(input.sumstats, chunksize=5E4, index_col=['chromosome', 'base_pair_location']):
+            chunk = chunk[chunk.index.isin(bed.index)]
+            dfs.append(chunk)
+
+        df = pd.concat(dfs).reset_index()
+
+        if wildcards.anc == ['EUR']:
+            df['N_case'] = 831
+            df['N_ctrl'] = 27599
+        else:
+            df['N_case'] = 259
+            df['N_ctrl'] = 6376
+
+        col_map = {'chromosome': 'CHR',
+                   'base_pair_location': 'POS',
+                   'variant_id': 'ID',
+                   'other_allele': 'Allele1',
+                   'effect_allele': 'Allele2',
+                   'effect_allele_frequency': 'AF_Allele2'}
+
+        df['BETA'] = np.log(df['odds_ratio'])
+        df['SE'] = (df['odds_ratio_ci_95U'] - df['odds_ratio']) / 1.96
+        df['Z'] = df['BETA'] / df['SE']
+        df['P'] = 2 * norm.cdf(-df['Z'].abs())
+        df = df.rename(columns=col_map)
+        print(df)
+        print(df.columns)
+        df.to_csv(output.subset, sep='\t', index=False)
+
+rule reformat_subtype_sumstats:
+    output:
+        sumstats='BioVU_{anc}/Sumstats/cluster_vs_controls_{i}.saige.gz'
+    input:
+        sumstats='Box_Download/BioVU.pheno{i}.{anc}.txt.gz',
+        bed='/project/ssverma_shared/projects/Endometriosis/Endo_Subtyping_Heterogeneity/1KG_LD_Testing/Rahmioglu_tag_snps_b38.bed'
+    resources: mem_mb=18000
+    run:
+        import pandas as pd
+        import numpy as np
+        from scipy.stats import norm
+
+        bed = pd.read_table(input.bed, header=None)
+        bed['CHR'] = bed[0].str.replace('chr', '').astype(int)
+        bed = bed.set_index(['CHR', 1])
+        print(bed)
+
+        dfs = []
+        for chunk in pd.read_table(input.sumstats, chunksize=5E4, index_col=['CHR', 'POS']):
+            chunk = chunk[chunk.index.isin(bed.index)]
+            dfs.append(chunk)
+
+        df = pd.concat(dfs).reset_index()
+        print(df.columns)
+
+        col_map = {'MarkerID': 'ID',
+                   'p.value': 'P'}
+
+        df = df.rename(columns=col_map)
+        print(df)
+
+        df.to_csv(output.sumstats, sep='\t', index=False)
+
+rule reformat_nc_subtype_sumstats:
+    output:
+        sumstats='../../Association_Testing_Negative_Control/BioVU/BioVU_{anc}/Sumstats/cluster_vs_controls_{i}.saige.gz'
+    input:
+        sumstats='Box_Download/BioVU.neg_control{i}.{anc}.txt.gz',
+        bed='/project/ssverma_shared/projects/Endometriosis/Endo_Subtyping_Heterogeneity/1KG_LD_Testing/Rahmioglu_tag_snps_b38.bed'
+    resources: mem_mb=18000
+    run:
+        import pandas as pd
+        import numpy as np
+        from scipy.stats import norm
+
+        bed = pd.read_table(input.bed, header=None)
+        bed['CHR'] = bed[0].str.replace('chr', '').astype(int)
+        bed = bed.set_index(['CHR', 1])
+        print(bed)
+
+        dfs = []
+        for chunk in pd.read_table(input.sumstats, chunksize=5E4, index_col=['CHR', 'POS']):
+            chunk = chunk[chunk.index.isin(bed.index)]
+            dfs.append(chunk)
+
+        df = pd.concat(dfs).reset_index()
+        print(df.columns)
+
+        col_map = {'MarkerID': 'ID',
+                   'p.value': 'P'}
+
+        df = df.rename(columns=col_map)
+        print(df)
+
+        df.to_csv(output.sumstats, sep='\t', index=False)

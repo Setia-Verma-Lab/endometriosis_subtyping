@@ -161,3 +161,4 @@ Association_Testing/AOU/saige_results.tar.gz
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 /Association_Testing/AOU/saige_results_old.tar.gz
+/Association_Testing/BioVU/Sampling/

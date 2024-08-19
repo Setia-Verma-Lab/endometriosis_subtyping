@@ -1,6 +1,6 @@
 for a in AFR EUR ASIAN
 do
-  for d in PMBB eMERGE UKBB
+  for d in PMBB eMERGE UKBB BioVU
   do
     rm ${d}_${a} || true
     ln -s ../Association_Testing_Negative_Control/${d}/${d}_${a} ${d}_${a}

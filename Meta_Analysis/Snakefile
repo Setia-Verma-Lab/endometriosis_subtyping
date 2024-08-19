@@ -2,7 +2,7 @@ import os
 
 rule all:
     input:
-        expand('SNP_Lists/{dataset}_to_PMBB_ID_map.txt', dataset=['eMERGE', 'UKBB', 'AOU'])
+        expand('SNP_Lists/{dataset}_to_PMBB_ID_map.txt', dataset=['eMERGE', 'UKBB', 'AOU', 'BioVU'])
 def get_sumstats(dataset):
     files = []
 
@@ -21,6 +21,10 @@ def get_sumstats(dataset):
     elif dataset == 'AOU':
         for a in ['AFR', 'EUR', 'ASIAN']:
             dir = f'AOU_{a}/Sumstats/'
+            files.extend([dir + f for f in os.listdir(dir)])
+    elif dataset == 'BioVU':
+        for a in ['AFR', 'EUR']:
+            dir = f'BioVU_{a}/Sumstats/'
             files.extend([dir + f for f in os.listdir(dir)])
 
     return files
@@ -79,17 +83,19 @@ rule align_to_PMBB:
         map='SNP_Lists/{other_dataset}_to_PMBB_ID_map.txt'
     input:
         PMBB='SNP_Lists/PMBB_GWAS_variants_liftover_input.txt',
-        other=lambda wildcards: 'SNP_Lists/{other_dataset}_GWAS_variants_liftover_output.txt' if wildcards.other_dataset != 'AOU' else 'SNP_Lists/{other_dataset}_GWAS_variants_liftover_input.txt'
+        other=lambda wildcards: 'SNP_Lists/{other_dataset}_GWAS_variants_liftover_output.txt' if wildcards.other_dataset in ['UKBB', 'eMERGE'] else 'SNP_Lists/{other_dataset}_GWAS_variants_liftover_input.txt'
     run:
         import pandas as pd
 
         pmbb = pd.read_table(input.PMBB, header=None, names=['chrCHR', 'POS', 'POS+1', 'ID', 'non_effect', 'effect'], sep=' ')
-        other = pd.read_table(input.other, header=None, names=['chrCHR', 'POS', 'POS+1', 'ID', 'non_effect', 'effect'], index_col=['chrCHR', 'POS', 'non_effect', 'effect'], sep=' ' if wildcards.other_dataset == 'AOU' else '\t')
-
+        other = pd.read_table(input.other, header=None, names=['chrCHR', 'POS', 'POS+1', 'ID', 'non_effect', 'effect'], index_col=['chrCHR', 'POS', 'non_effect', 'effect'], sep=' ' if wildcards.other_dataset in ['AOU', 'BioVU'] else '\t')
+        other = other[~other.index.duplicated()]
         print(other)
 
         pmbb_forward = pmbb.set_index(['chrCHR', 'POS', 'non_effect', 'effect'])
+        pmbb_forward = pmbb_forward[~pmbb_forward.index.duplicated()]
         pmbb_backward = pmbb.set_index(['chrCHR', 'POS', 'effect', 'non_effect'])
+        pmbb_backward = pmbb_backward[~pmbb_backward.index.duplicated()]
 
         match_forward = pmbb_forward.index.intersection(other.index)
         match_backward = pmbb_backward.index.intersection(other.index)
