@@ -1,0 +1,8 @@
+# Path to loki.db or loki-hg19.db. This defines output build
+loki_path: '/home/guarelin/group/datasets/loki/loki.db'
+
+# Input build (can be 19 or 38)
+build: '38'
+
+# KB distance to consider a gene "close"
+close_dist: 5E4

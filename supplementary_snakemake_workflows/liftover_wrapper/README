@@ -1,0 +1,7 @@
+This workflow employs liftover to map chr/pos coordinates from build to build.
+
+It returns a compressed, tab-delimited file with the same contents you provided EXCEPT for the new coordinates.
+
+WARNING: I use awk, so the input table must be whitespace-delimited with no unexpected column issues (missingness, etc)
+
+Main Output Target: {file_nickname}.liftover.tsv.gz

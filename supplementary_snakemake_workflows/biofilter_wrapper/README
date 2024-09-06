@@ -1,0 +1,20 @@
+Main Target File Options and Corresponding Input Files:
+    Call Biofilter Positions:
+        - output: Annotations/{data}_biofilter_genes_rsids.csv (annotates positions with nearest gene)
+        - input:  Annotations/{data}_biofilter_input_positions.txt (3-column space-delimited file: CHR ID POS)
+    Call Biofilter Genes:
+        - output: Annotations/{data}_biofilter_gene_regions.txt
+        - input:  Annotations/{data}_biofilter_input_genes.txt (single column list of genes)
+    Call Biofilter SNPs:
+        - output: Annotations/{data}_biofilter_snps_rsids.csv
+        - input:  Annotations/{data}_biofilter_input_snps.txt (single column list of RSIDs)
+
+Note: many of the other workflows incorporate annotations into the Summary files automatically so you may not need to call these targets manually
+
+Gene Annotation Algorithm:
+    - If a variant is in a gene, it gets assigned that gene
+    - If a variant is between two genes, we assess the following:
+        - Is it "close" to either gene given config option?
+        - If it is "close" to both, it gets annotated to both with a /
+        - If it is only "close" to one, it gets annotated with the "close" gene
+        - If it is "close" to neither, it gets annotated to both with a /

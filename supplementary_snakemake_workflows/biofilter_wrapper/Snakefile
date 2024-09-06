@@ -1,0 +1,150 @@
+configfile: 'config_biofilter.yaml'
+
+ANNOTATIONS = 'position_label snp position gene upstream downstream'
+import pandas as pd
+
+rule call_biofilter_positions:
+    output:
+        'Annotations/{data}_biofilter_positions_annotations.txt'
+    input:
+        'Annotations/{data}_biofilter_input_positions.txt'
+    params:
+        hg=config['build'],
+        loki=config['loki_path'],
+        annot=ANNOTATIONS,
+        output_prefix='Annotations/{data}_biofilter_annotations',
+        output_ext=ANNOTATIONS.split()[0] + '.' + '-'.join(ANNOTATIONS.split()[1:]),
+        biofilter_python=config['biofilter_python'],
+        biofilter_script=config['biofilter_script']
+    envmodules: 'biofilter/2.4.3'
+    shell:
+        """
+        rm {output} || true
+
+         {params.biofilter_python} {params.biofilter_script} --verbose --knowledge {params.loki} \
+         --position-file {input} \
+         --annotate {params.annot} \
+         --report-invalid-input \
+         --overwrite \
+         --prefix {params.output_prefix} \
+         --ucsc-build-version {params.hg}
+         
+         mv {params.output_prefix}.{params.output_ext} {output}
+        """
+
+def assign_gene_annotations(biofilter_df, close_dist=5E4):
+    # Picking first RSID by default because in dbSNP it's usually an SNV
+    biofilter_df = biofilter_df[~biofilter_df.index.duplicated(keep='first')]
+
+    # Define "close" as 50kb
+    biofilter_df[['u-close', 'd-close']] = biofilter_df[['distance', 'distance.1']] < float(close_dist)
+    biofilter_df['gene-combo'] = biofilter_df[['upstream', 'downstream']].apply(lambda x: '/'.join(x.astype(str)),axis=1)
+    biofilter_df['missing'] = pd.isnull(biofilter_df['gene'])
+    biofilter_df['use-combo'] = (biofilter_df['u-close'] == biofilter_df['d-close']) & biofilter_df['missing']  # Both close or both far
+    biofilter_df['use-u'] = ~biofilter_df['use-combo'] & biofilter_df['missing'] & biofilter_df['u-close']
+    biofilter_df['use-d'] = ~biofilter_df['use-combo'] & biofilter_df['missing'] & biofilter_df['d-close']
+
+    biofilter_df['Gene'] = biofilter_df['gene']
+    for boolCol, geneCol in {'use-u': 'upstream', 'use-d': 'downstream', 'use-combo': 'gene-combo'}.items():
+        idx = biofilter_df.index[biofilter_df[boolCol]]
+        biofilter_df.loc[idx, 'Gene'] = biofilter_df.loc[idx, geneCol]
+
+    return biofilter_df
+
+rule assign_position_rsids_genes:
+    output:
+        'Annotations/{data}_biofilter_genes_rsids.csv'
+    input:
+        'Annotations/{data}_biofilter_positions_annotations.txt'
+    params:
+        close_dist=config['close_dist']
+    run:
+        import pandas as pd
+
+        df = pd.read_table(str(input))
+        label_col = '#position_label' if '#position_label' in df.columns else 'position_label'
+        df = df.set_index(label_col)
+
+        df = assign_gene_annotations(df, params.close_dist)
+
+        outDF = df.reset_index()[[label_col, 'snp', 'chr', 'pos', 'Gene']]
+        outDF = outDF.rename(columns={label_col: 'Var_ID', 'snp': 'RSID',
+                                      'chr': '#CHROM', 'pos': 'POS'})
+        outDF.to_csv(str(output), index=False)
+
+rule assign_snp_genes:
+    output:
+        'Annotations/{data}_biofilter_rsids.csv'
+    input:
+        'Annotations/{data}_biofilter_snps_annotations.txt'
+    run:
+        import pandas as pd
+        import numpy as np
+
+        df = pd.read_table(str(input))
+        label_col = '#position_label' if '#position_label' in df.columns else 'position_label'
+        df = df.set_index(label_col)
+
+        df = assign_gene_annotations(df)
+
+        outDF = df.reset_index()[[label_col, 'snp', 'chr', 'pos', 'Gene']]
+        outDF = outDF.rename(columns={label_col: 'Var_ID', 'snp': 'RSID',
+                                      'chr': '#CHROM', 'pos': 'POS'})
+        outDF.to_csv(str(output), index=False)
+
+rule call_biofilter_snps:
+    output:
+        'Annotations/{data}_biofilter_snps_annotations.txt'
+    input:
+        'Annotations/{data}_biofilter_input_snps.txt'
+    params:
+        loki=config['loki_path'],
+        annot=ANNOTATIONS,
+        output_prefix='Annotations/{data}_biofilter_annotations',
+        output_ext=ANNOTATIONS.split()[0] + '.' + '-'.join(ANNOTATIONS.split()[1:]),
+        biofilter_python=config['biofilter_python'],
+        biofilter_script=config['biofilter_script']
+    envmodules: 'biofilter/2.4.3'
+    shell:
+        """
+        rm {output} || true
+
+        module purge
+
+        {params.biofilter_python} {params.biofilter_script} --verbose --knowledge {params.loki} \
+         --snp-file {input} \
+         --annotate {params.annot} \
+         --report-invalid-input \
+         --overwrite \
+         --prefix {params.output_prefix} 
+
+         mv {params.output_prefix}.{params.output_ext} {output}
+        """
+
+rule call_biofilter_genes:
+    output:
+        'Annotations/{data}_biofilter_gene_regions.txt'
+    input:
+        'Annotations/{data}_biofilter_input_genes.txt'
+    params:
+        loki=config['loki_path'],
+        annot=ANNOTATIONS,
+        output_prefix='Annotations/{data}_biofilter_annotations',
+        biofilter_python=config['biofilter_python'],
+        biofilter_script=config['biofilter_script']
+    envmodules: 'biofilter/2.4.3'
+    shell:
+        """
+        rm {output} || true
+
+        module purge
+
+        {params.biofilter_python} {params.biofilter_script} --verbose --knowledge {params.loki} \
+         --gene-file {input} \
+         --annotate gene_label gene region \
+         --report-invalid-input \
+         --overwrite \
+         --prefix {params.output_prefix}
+         
+         mv Annotations/{wildcards.data}_biofilter_annotations.gene_label.gene-region Annotations/{wildcards.data}_biofilter_gene_regions.txt
+        """

@@ -1,0 +1,38 @@
+# Nested phenotype definitions
+# PheCodes are only considered for PMBB and eMERGE
+# Overall phenotype columns will report union of cases and union of exclusions
+# Notice use of * wildcards
+# The phenotyping algorithm front-matches codes via regular expressions
+
+pheno_defs:
+  endometriosis:
+    phecode_cases: ['615']
+    icd10_cases: ['N80.']
+    icd9_cases: ['617.']
+  type_2_diabetes:
+    icd10_cases: ['E11.']
+    icd10_exclude: ['E10']
+    icd9_cases: ['250.*0', '250.*2']
+    icd9_exclude: ['250.*1', '250.*3']
+
+# Available covariates: AGE, SEX, BMI, and BP (PMBB only)
+keep_covars: ['AGE', 'SEX']
+
+# For PMBB, it pulls the genotype PCs
+# For UKBB, it pulls PCs from the field matrix
+# For eMERGE, it uses PCs from the eMERGE III summary/accessory files
+keep_PCs: 10
+
+# All super populations would work for PMBB (AFR, AMR, EAS, EUR, SAS)
+# Only AFR and EUR would work for UKBB and eMERGE
+ancestries: ['AFR', 'EUR']
+
+# PMBB-Only: we can grab binary history of procedure
+procedures_cpt4:
+  hysterectomy: []
+  c-section: []
+  cystectomy: []
+
+# PMBB-Only: we can pull labs
+lab_list: ['ESR', 'CRP', 'Chol-HDL', 'ALT', 'AST', 'Alkphos']
+

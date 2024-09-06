@@ -1,0 +1,10 @@
+from_build: '38'
+to_build: '19'
+
+input_info:
+  Sakaue: # give the file a nickname
+    file_in: 'endometriosis_Sakaue_maf-0.01_hg38.gz'
+    chrCol: '1'
+    posCol: '2'
+    has_header: True
+    keep_failed_rows: False

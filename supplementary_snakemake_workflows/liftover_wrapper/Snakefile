@@ -1,0 +1,104 @@
+configfile: 'config_liftover.yaml'
+
+CHAINFILES = '/project/ritchie/datasets/ucsc-chainfiles/'
+
+rule get_liftover_input:
+    output:
+        '{file}.liftover_input.txt'
+    input:
+        lambda wildcards: config['input_info'][wildcards.file]['file_in']
+    params:
+        chrCol=lambda wildcards: config['input_info'][wildcards.file]['chrCol'],
+        posCol=lambda wildcards: config['input_info'][wildcards.file]['posCol'],
+        read_cmd=lambda wildcards: 'zcat' if '.gz' in config['input_info'][wildcards.file]['file_in'] else 'cat',
+        header_skip=lambda wildcards: '+2' if config['input_info'][wildcards.file]['has_header'] else '+1'
+    shell:
+        """
+        {params.read_cmd} {input} | tail -n {params.header_skip} | awk '{{print "chr"${params.chrCol}, ${params.posCol}, ${params.posCol}+1}}' > {output}
+        """
+
+rule do_liftover:
+    output:
+        lo_out='{file}.liftover_output.txt',
+        lo_failed='{file}.liftover_failed.txt'
+    input:
+        lo_in='{file}.liftover_input.txt',
+        chain=CHAINFILES + 'hg' + config['from_build'] + 'ToHg' + config['to_build'] + '.over.chain'
+    envmodules:
+        'liftOver'
+    resources: mem_mb=15000
+    shell:
+        """
+        liftOver {input} {output}
+        """
+
+rule join_liftover:
+    output:
+        '{file}.liftover.tsv.gz'
+    input:
+        lo_out='{file}.liftover_output.txt',
+        lo_failed='{file}.liftover_failed.txt',
+        table=lambda wildcards: config['input_info'][wildcards.file]['file_in']
+    params:
+        chrCol=lambda wildcards: config['input_info'][wildcards.file]['chrCol'],
+        posCol=lambda wildcards: config['input_info'][wildcards.file]['posCol'],
+        has_header=lambda wildcards: config['input_info'][wildcards.file]['has_header'],
+        keep_failed_rows=lambda wildcards:  config['input_info'][wildcards.file]['keep_failed_rows']
+    resources:
+        mem_mb=35000
+    run:
+        import pandas as pd
+        import os
+
+        ss = pd.read_table(input['table'], nrows=None, sep='\s+', header=None if not params.has_header else 'infer')
+        chrColIndex = int(params['chrCol']) - 1
+        posColIndex = int(params['posCol']) - 1
+        original_column_order = ss.columns
+        chrCol = ss.columns[chrColIndex]
+        posCol = ss.columns[posColIndex]
+        ss[chrCol] = ss[chrCol].astype(str)
+        ss[posCol] = ss[posCol].astype(int)
+        ss = ss.set_index([chrCol, posCol])
+        print(ss)
+
+        if os.path.getsize(str(input['lo_failed'])) != 0:
+            failed = pd.read_table(input['lo_failed'], comment='#', header=None, names=['chrCHR', 'POS', 'END'])
+            failed['CHR'] = failed['chrCHR'].str[3:]
+        else:
+            failed = pd.DataFrame(columns=['chrCHR', 'POS', 'END', 'CHR'])
+
+        new = pd.read_table(input['lo_out'], header=None, names=['chrCHR', 'POS', 'END'], nrows=None)
+        new['CHR'] = new['chrCHR'].str[3:]
+        new['POS'] = new['POS'].astype(int)
+        failed['POS'] = failed['POS'].astype(int)
+        new = new.set_index(['CHR', 'POS'])
+        failed = failed.set_index(['CHR', 'POS'])
+        drop_coords = failed.index.intersection(ss.index)
+
+        if not params.keep_failed_rows:
+            print(len(drop_coords), 'liftover coordinates failed, will be dropped')
+            ss = ss[~ss.index.isin(drop_coords)]
+            ss.index = new.index
+            ss.index.names = [chrCol, posCol]
+            ss = ss.reset_index()[original_column_order]
+        else:
+            print(len(drop_coords), 'liftover coordinates failed, will be set to NA')
+            ss.index.names = [chrCol, posCol]
+
+            old_index = ss.index
+            ss = ss.reset_index()[original_column_order]
+
+            good_rows = ss.index[~old_index.isin(drop_coords)]
+            print(len(good_rows))
+            bad_rows = ss.index[old_index.isin(drop_coords)]
+            print(len(bad_rows))
+
+            ss.loc[good_rows, posCol] = new.index.get_level_values(1)
+            print(ss)
+            ss.loc[good_rows, chrCol] = new.index.get_level_values(0)
+            ss.loc[bad_rows, posCol] = 0
+
+        print(ss)
+        ss.to_csv(str(output), sep='\t', header=params.has_header, index=False)
+        print('End')
+

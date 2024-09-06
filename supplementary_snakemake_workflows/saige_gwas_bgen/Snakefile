@@ -1,0 +1,537 @@
+configfile: 'config_saige_bgen.yaml'
+# include: '/project/ritchie/lindsay_snakemake_workflows/biofilter_wrapper/Snakefile'
+# include: '/project/ssverma_shared/tools/lindsay_snakemake_workflows/biofilter_wrapper/Snakefile'
+include: '/project/ssverma_shared/tools/lindsay_snakemake_workflows/biofilter_wrapper/Snakefile'
+
+CHROMOSOMES=config['chromosomes']
+
+wildcard_constraints:
+    chr='[0-9]{1,2}|X',
+    cohort_dir='(' + '|'.join(config['saige_cohorts']) + ')'
+
+def get_covar_list_args(wildcards):
+    args = []
+    if 'sex_strat_cohorts' in config.keys() and wildcards.cohort_dir in config['sex_strat_cohorts']:
+        if len(config['sex_strat_covars']['cont_covars']) > 0 and len(config['sex_strat_covars']['cat_covars']) > 0:
+            args.extend(['--covarColList=' + ','.join(config['sex_strat_covars']['cont_covars']) + ',' + ','.join(config['sex_strat_covars']['cat_covars'])])
+            args.extend(['--qCovarColList=' + ','.join(config['sex_strat_covars']['cat_covars'])])
+        elif len(config['sex_strat_covars']['cat_covars']) > 0:
+            args.extend(['--qCovarColList=' + ','.join(config['sex_strat_covars']['cat_covars'])])
+        elif len(config['sex_strat_covars']['cont_covars']) > 0:
+            args.extend(['--covarColList=' + ','.join(config['sex_strat_covars']['cont_covars'])])
+    else:
+        if len(config['cont_covars']) > 0 and len(config['cat_covars']) > 0:
+            args.extend(['--covarColList=' + ','.join(config['cont_covars']) + ',' + ','.join(config['cat_covars'])])
+            args.extend(['--qCovarColList=' + ','.join(config['cat_covars'])])
+        elif len(config['cont_covars']) > 0:
+            args.extend(['--covarColList=' + ','.join(config['cont_covars'])])
+        elif len(config['cat_covars']) > 0:
+            args.extend(['--qCovarColList=' + ','.join(config['cat_covars'])])
+    return ' '.join(args)
+
+rule plink_qc_for_step1:
+    output:
+        expand('{{cohort_dir}}/Saige_Step1/step1_plink{ext}', ext=['.bed', '.bim', '.fam'])
+    input:
+        plink=expand(config['QC_Plink_Prefix'] + '{ext}', ext=config['QC_Plink_Extensions']),
+        longrange='/project/ssverma_shared/datasets/Longrange_Regions/longrange_LD_hg' + config['build'] + '.bed',
+        samples='{cohort_dir}/sample_list.txt'
+    params:
+        plink_prefix=config['QC_Plink_Prefix'],
+        plink_flag=config['QC_Plink_Flag'],
+        output_prefix='{cohort_dir}/Saige_Step1/step1_plink'
+    envmodules:
+        'plink/2.0-20210505'
+    threads: 5
+    resources:
+        mem_mb=20000
+    shell:
+        """
+        plink2 --make-bed \
+          {params.plink_flag} {params.plink_prefix} \
+          --keep-fam {input.samples} \
+          --exclude range {input.longrange} \
+          --maf 0.01 --geno 0.01 --not-chr X,Y,MT --hwe 1E-6 --snps-only \
+          --out {params.output_prefix}
+        """
+
+rule call_saige_step1_bin:
+    output:
+        '{cohort_dir}/Saige_Step1_Results/bin.{pheno}.rda',
+        '{cohort_dir}/Saige_Step1_Results/bin.{pheno}.varianceRatio.txt'
+    input:
+        plink=expand('{{cohort_dir}}/Saige_Step1/step1_plink{ext}', ext=['.bed', '.bim', '.fam']),
+        pheno='{cohort_dir}/saige_pheno_covars.txt',
+        script='/project/ssverma_shared/tools/SAIGE/extdata/step1_fitNULLGLMM.R'
+    params:
+        covar_args=lambda wildcards: get_covar_list_args(wildcards),
+        plink_prefix='{cohort_dir}/Saige_Step1/step1_plink',
+        out_prefix='{cohort_dir}/Saige_Step1_Results/bin.{pheno}'
+    envmodules:
+        'lapack/3.8.0', 'R/3.6.3', 'gcc/8.5.0'
+    threads: 20
+    resources:
+        mem_mb=60000
+    shell:
+        """
+        stdbuf -e0 -o0 Rscript {input.script} \
+         --plinkFile={params.plink_prefix} \
+         --phenoFile={input.pheno} \
+         --phenoCol={wildcards.pheno} \
+         {params.covar_args} \
+         --sampleIDColinphenoFile=IID \
+         --traitType=binary \
+         --outputPrefix={params.out_prefix} \
+         --nThreads=40 \
+         --IsOverwriteVarianceRatioFile=TRUE > {wildcards.cohort_dir}/Saige_Step1_Results/bin.{wildcards.pheno}.log
+        """
+
+rule make_snplist_for_step2:
+    output:
+        '{cohort_dir}/Saige_Step2/subset.{chr}.snplist'
+    input:
+        plink_set=expand(config['Step2_PGEN_Prefix'] + '{{chr}}' + config['Step2_PGEN_Suffix'] + '{ext}', ext=['.pgen', '.pvar', '.psam']),
+        cohort='{cohort_dir}/sample_list.txt'
+    params:
+        mac=config['min_mac'],
+        info=config['min_info'],
+        plink_prefix=config['Step2_PGEN_Prefix'] + '{chr}' + config['Step2_PGEN_Suffix'],
+        output_prefix='{cohort_dir}/Saige_Step2/subset.{chr}'
+    envmodules: 'plink/2.0-20210505'
+    resources: mem_mb=30000
+    shell:
+        """
+        plink --write-snplist allow-dups \
+          --pfile {params.plink_prefix} \
+          --mac {params.mac} \
+          --exclude-if-info "R2<={params.info}" \
+          --memory 25000 \
+          --keep {input.cohort} \
+          --out {params.output_prefix}
+        """
+def get_chr_arg(wildcards):
+    if config['CHR_has_chr_prefix']:
+        return 'chr' + wildcards.chr
+    elif config['CHR_has_leading_0']:
+        return '0' + wildcards.chr if len(wildcards.chr) == 1 else wildcards.chr
+    else:
+        return wildcards.chr
+
+rule call_saige_step2_bin:
+    output:
+        '{cohort_dir}/Saige_Step2_Results/bin.{pheno}.{chr}.txt'
+    input:
+        step1_rda='{cohort_dir}/Saige_Step1_Results/bin.{pheno}.rda',
+        step1_var='{cohort_dir}/Saige_Step1_Results/bin.{pheno}.varianceRatio.txt',
+        bgen_set=expand(config['Step2_BGEN_Prefix'] + '{{chr}}' + config['Step2_BGEN_Suffix'] + '{ext}', ext=['.bgen', '.bgen.bgi']),
+        bgen_sample=config['Step2_BGEN_Sample'],
+        snplist='{cohort_dir}/Saige_Step2/subset.{chr}.snplist',
+        script='/project/ssverma_shared/tools/SAIGE/extdata/step2_SPAtests.R'
+    params:
+        mac=config['min_mac'],
+        info=config['min_info'],
+        bgen_file=config['Step2_BGEN_Prefix'] + '{chr}' + config['Step2_BGEN_Suffix'] + '.bgen',
+        bgen_index=config['Step2_BGEN_Prefix'] + '{chr}' + config['Step2_BGEN_Suffix'] + '.bgen.bgi',
+        allele_order=config['Step2_BGEN_Allele_Order'],
+        chr_arg=lambda wildcards: get_chr_arg(wildcards)
+    envmodules:
+        'lapack/3.8.0', 'R/3.6.3', 'gcc/8.5.0'
+    threads: 1
+    resources:
+        mem_mb=10000
+    shell:
+        """
+        stdbuf -e0 -o0 Rscript {input.script} \
+         --bgenFile={params.bgen_file} \
+         --bgenFileIndex={params.bgen_index} \
+         --minInfo={params.info} \
+         --sampleFile={input.bgen_sample} \
+         --AlleleOrder={params.allele_order} \
+         --idstoIncludeFile={input.snplist} \
+         --chrom={params.chr_arg} \
+         --minMAC={params.mac} \
+         --GMMATmodelFile={input.step1_rda} \
+         --varianceRatioFile={input.step1_var} \
+         --LOCO=TRUE \
+         --is_Firth_beta=TRUE \
+         --pCutoffforFirth=0.05 \
+         --is_output_moreDetails=TRUE \
+         --SAIGEOutputFile={output} > {wildcards.cohort_dir}/Saige_Step2_Results/bin.{wildcards.pheno}.{wildcards.chr}.log
+        """
+
+rule call_saige_step1_quant:
+    output:
+        '{cohort_dir}/Saige_Step1_Results/quant.{pheno}.rda',
+        '{cohort_dir}/Saige_Step1_Results/quant.{pheno}.varianceRatio.txt'
+    input:
+        plink=expand('{{cohort_dir}}/Saige_Step1/step1_plink{ext}', ext=['.bed', '.bim', '.fam']),
+        pheno='{cohort_dir}/saige_pheno_covars.txt',
+        script='/project/ssverma_shared/tools/SAIGE/extdata/step1_fitNULLGLMM.R'
+    params:
+        covar_args=lambda wildcards: get_covar_list_args(wildcards),
+        plink_prefix='{cohort_dir}/Saige_Step1/step1_plink',
+        out_prefix='{cohort_dir}/Saige_Step1_Results/quant.{pheno}'
+    envmodules:
+        'lapack/3.8.0', 'R/3.6.3', 'gcc/8.5.0'
+    threads: 20
+    resources:
+        mem_mb=60000
+    shell:
+        """
+        stdbuf -e0 -o0 Rscript {input.script} \
+         --plinkFile={params.plink_prefix} \
+         --phenoFile={input.pheno} \
+         --phenoCol={wildcards.pheno} \
+         {params.covar_args} \
+         --sampleIDColinphenoFile=IID \
+         --traitType=quantitative \
+         --invNormalize=TRUE \
+         --outputPrefix={params.out_prefix} \
+         --nThreads=40 \
+         --IsOverwriteVarianceRatioFile=TRUE > {wildcards.cohort_dir}/Saige_Step1_Results/quant.{wildcards.pheno}.log
+        """
+
+rule call_saige_step2_quant:
+    output:
+        '{cohort_dir}/Saige_Step2_Results/quant.{pheno}.{chr}.txt'
+    input:
+        step1_rda='{cohort_dir}/Saige_Step1_Results/quant.{pheno}.rda',
+        step1_var='{cohort_dir}/Saige_Step1_Results/quant.{pheno}.varianceRatio.txt',
+        bgen_set=expand(config['Step2_BGEN_Prefix'] + '{{chr}}' + config['Step2_BGEN_Suffix'] + '{ext}', ext=['.bgen', '.bgen.bgi']),
+        bgen_sample=config['Step2_BGEN_Sample'],
+        snplist='{cohort_dir}/Saige_Step2/subset.{chr}.snplist',
+        script='/project/ssverma_shared/tools/SAIGE/extdata/step2_SPAtests.R'
+    params:
+        mac=config['min_mac'],
+        info=config['min_info'],
+        bgen_file=config['Step2_BGEN_Prefix'] + '{chr}' + config['Step2_BGEN_Suffix'] + '.bgen',
+        bgen_index=config['Step2_BGEN_Prefix'] + '{chr}' + config['Step2_BGEN_Suffix'] + '.bgen.bgi',
+        allele_order=config['Step2_BGEN_Allele_Order'],
+        chr_arg=lambda wildcards: get_chr_arg(wildcards)
+    envmodules:
+        'lapack/3.8.0', 'R/3.6.3', 'gcc/8.5.0'
+    threads: 1
+    resources:
+        mem_mb=10000
+    shell:
+        """
+        stdbuf -e0 -o0 Rscript {input.script} \
+         --bgenFile={params.bgen_file} \
+         --bgenFileIndex={params.bgen_index} \
+         --minInfo={params.info} \
+         --sampleFile={input.bgen_sample} \
+         --AlleleOrder={params.allele_order} \
+         --idstoIncludeFile={input.snplist} \
+         --chrom={params.chr_arg} \
+         --minMAC={params.mac} \
+         --GMMATmodelFile={input.step1_rda} \
+         --varianceRatioFile={input.step1_var} \
+         --LOCO=TRUE \
+         --is_Firth_beta=TRUE \
+         --pCutoffforFirth=0.05 \
+         --is_output_moreDetails=TRUE \
+         --SAIGEOutputFile={output} > {wildcards.cohort_dir}/Saige_Step2_Results/quant.{wildcards.pheno}.{wildcards.chr}.log
+        """
+
+def get_chr_merge_input(wildcards):
+    quant_expand = expand('{{cohort_dir}}/Saige_Step2_Results/quant.{{pheno}}.{chr}.txt', chr=CHROMOSOMES)
+    bin_expand = expand('{{cohort_dir}}/Saige_Step2_Results/bin.{{pheno}}.{chr}.txt', chr=CHROMOSOMES)
+    return quant_expand if wildcards.pheno in config['quant_phenos'] else bin_expand
+
+rule merge_saige_output:
+    output:
+        '{cohort_dir}/Sumstats/{pheno}.saige.gz'
+    input:
+        chr_input=get_chr_merge_input,
+        script='scripts/merge_saige_out.py'
+    params:
+        r='{cohort_dir}/Saige_Step2_Results/',
+        pheno='{pheno}',
+        col_name_str='\n'.join(k + ' ' + v for k, v in config['col_names'].items())
+    threads: 1
+    resources:
+        mem_mb=35000
+    shell:
+        """
+        echo "{params.col_name_str}" > colnames.txt;
+        python {input.script} --cols colnames.txt -r {params.r} --pheno {params.pheno} -o {output}
+        """
+
+rule collect_saige_suggestive_variants:
+    output:
+        '{cohort_dir}/Suggestive/{pheno}.txt'
+    input:
+        '{cohort_dir}/Sumstats/{pheno}.saige.gz'
+    shell:
+        """
+        mkdir -p {wildcards.cohort_dir}/Suggestive
+        zcat {input} | cut -f1,2,3,13 | awk '{{if (NR==1 || $4<=1E-5) {{print $1, $2, $3, $4}}}}' > {output}
+        """
+
+rule make_saige_suggestive_biofilter_input:
+    output:
+        'Annotations/saige_suggestive_biofilter_input_positions.txt'
+    input:
+        quant_sumstats=expand('{cohort_dir}/Suggestive/{pheno}.txt', cohort_dir=config['saige_cohorts'], pheno=config['quant_phenos']),
+        bin_sumstats=expand('{cohort_dir}/Suggestive/{pheno}.txt', cohort_dir=config['saige_cohorts'], pheno=config['bin_phenos'])
+    shell:
+        """cut -d ' ' -f1-3 {input} | awk '{{print $1, $3, $2}}' | sort -n | uniq > {output}"""
+
+rule annotate_compile_saige_suggestive:
+    output:
+        'Summary/saige_all_suggestive.csv'
+    input:
+        quant_sumstats=expand('{cohort_dir}/Suggestive/{pheno}.txt',cohort_dir=config['saige_cohorts'],pheno=config['quant_phenos']),
+        bin_sumstats=expand('{cohort_dir}/Suggestive/{pheno}.txt',cohort_dir=config['saige_cohorts'],pheno=config['bin_phenos']),
+        annot='Annotations/saige_suggestive_biofilter_genes_rsids.csv'
+    run:
+        import pandas as pd
+        import os
+
+        dfs = []
+        phenos = config['quant_phenos']
+        # phenos = []
+        phenos.extend(config['bin_phenos'])
+        for c in config['saige_cohorts']:
+            for p in phenos:
+                f = c + '/Suggestive/' + p + '.txt'
+                if os.path.getsize(f) == 0:
+                    continue
+                df = pd.read_table(f, sep=' ', index_col='ID')
+                df['COHORT'] = c
+                df['PHENO'] = p
+                dfs.append(df)
+
+        full = pd.concat(dfs).sort_values(by=['CHR', 'POS'])
+        bfDF = pd.read_csv(str(input.annot), index_col='Var_ID')
+        merged = full.merge(bfDF[['Gene', 'RSID']], left_index=True, right_index=True)
+        merged.index.name = 'Var_ID'
+        merged.to_csv(str(output))
+
+rule filter_saige_sumstats_for_rollup:
+    output:
+        temp('{cohort_dir}/FSS/{pheno}_{pval}.txt')
+    input:
+        '{cohort_dir}/Sumstats/{pheno}.saige.gz'
+    shell:
+        """zcat {input} | awk '{{if ($13 <= {wildcards.pval} || NR == 1) {{print $0}}}}' > {output}"""
+
+rule saige_sumstats_rollup:
+    output:
+        '{cohort_dir}/Sumstats/all_phenos_p_cutoff_{pval}.csv.gz'
+    input:
+        quant_sumstats = expand('{{cohort_dir}}/FSS/{pheno}_{{pval}}.txt', pheno=config['quant_phenos']),
+        bin_sumstats = expand('{{cohort_dir}}/FSS/{pheno}_{{pval}}.txt', pheno=config['bin_phenos'])
+    resources: mem_mb=12000
+    run:
+        import pandas as pd
+
+        dfs = []
+        # phenos = config['quant_phenos']
+        phenos = []
+        phenos.extend(config['bin_phenos'])
+        pval = wildcards.pval
+        c = wildcards.cohort_dir
+        for p in phenos:
+            f = c + '/FSS/' + p + '_' + pval + '.txt'
+            if os.path.getsize(f) == 0:
+                continue
+            df = pd.read_table(f, sep='\t')
+            df['COHORT'] = c
+            df['PHENO'] = p
+            dfs.append(df)
+
+        full = pd.concat(dfs).sort_values(by=['CHR', 'POS'])
+        full.to_csv(str(output), index=False)
+
+rule cohort_saige_sumstats_rollup:
+    output:
+        'Summary/all_saige_cohorts_all_phenos_p_cutoff_{pval}.csv.gz'
+    input:
+        expand('{cohort_dir}/Sumstats/all_phenos_p_cutoff_{{pval}}.csv.gz', cohort_dir=config['saige_cohorts'])
+    resources: mem_mb=30000
+    run:
+        import pandas as pd
+
+        dfs = []
+        for f in input:
+            if os.path.getsize(f) == 0:
+                continue
+            df = pd.read_csv(f)
+            dfs.append(df)
+
+        full = pd.concat(dfs).sort_values(by=['CHR', 'POS'])
+        full.to_csv(str(output),index=False)
+
+rule make_sumstats_liftover_input_saige:
+    output:
+        '{cohort_dir}/Sumstats/{pheno}.liftover_input.txt'
+    input:
+        sumstats='{cohort_dir}/Sumstats/{pheno}.saige.gz'
+    shell:
+        """
+        zcat {input} | tail -n +2 | awk '{{print "chr"$1, $2, $2+1}}' > {output}
+        """
+
+rule join_liftover_with_sumstats_saige:
+    output:
+        '{cohort_dir}/Sumstats/{pheno}.liftover.tsv.gz'
+    input:
+        lo_out='{cohort_dir}/Sumstats/{pheno}.liftover_output.txt',
+        lo_failed='{cohort_dir}/Sumstats/{pheno}.liftover_failed.txt',
+        table='{cohort_dir}/Sumstats/{pheno}.saige.gz'
+    params:
+        chrCol=1,
+        posCol=2,
+        has_header=True,
+        keep_failed_rows=False
+    resources:
+        mem_mb=35000
+    run:
+        import pandas as pd
+        import os
+
+        ss = pd.read_table(input['table'], nrows=None, sep='\s+', header=None if not params.has_header else 'infer')
+        chrColIndex = int(params['chrCol']) - 1
+        posColIndex = int(params['posCol']) - 1
+        original_column_order = ss.columns
+        chrCol = ss.columns[chrColIndex]
+        posCol = ss.columns[posColIndex]
+        ss[chrCol] = ss[chrCol].astype(str)
+        ss[posCol] = ss[posCol].astype(int)
+        ss = ss.set_index([chrCol, posCol])
+        print(ss)
+
+        if os.path.getsize(str(input['lo_failed'])) != 0:
+            failed = pd.read_table(input['lo_failed'], comment='#', header=None, names=['chrCHR', 'POS', 'END'])
+            failed['CHR'] = failed['chrCHR'].str[3:]
+        else:
+            failed = pd.DataFrame(columns=['chrCHR', 'POS', 'END', 'CHR'])
+
+        new = pd.read_table(input['lo_out'], header=None, names=['chrCHR', 'POS', 'END'], nrows=None)
+        new['CHR'] = new['chrCHR'].str[3:]
+        new['POS'] = new['POS'].astype(int)
+        failed['POS'] = failed['POS'].astype(int)
+        new = new.set_index(['CHR', 'POS'])
+        failed = failed.set_index(['CHR', 'POS'])
+        drop_coords = failed.index.intersection(ss.index)
+
+        if not params.keep_failed_rows:
+            print(len(drop_coords), 'liftover coordinates failed, will be dropped')
+            ss = ss[~ss.index.isin(drop_coords)]
+            ss.index = new.index
+            ss.index.names = [chrCol, posCol]
+            ss = ss.reset_index()[original_column_order]
+        else:
+            print(len(drop_coords), 'liftover coordinates failed, will be set to NA')
+            ss.index.names = [chrCol, posCol]
+
+            old_index = ss.index
+            ss = ss.reset_index()[original_column_order]
+
+            good_rows = ss.index[~old_index.isin(drop_coords)]
+            print(len(good_rows))
+            bad_rows = ss.index[old_index.isin(drop_coords)]
+            print(len(bad_rows))
+
+            ss.loc[good_rows, posCol] = new.index.get_level_values(1)
+            print(ss)
+            ss.loc[good_rows, chrCol] = new.index.get_level_values(0)
+            ss.loc[bad_rows, posCol] = 0
+
+        print(ss)
+        ss.to_csv(str(output), sep='\t', header=params.has_header, index=False)
+        print('End')
+
+rule make_meta_input_saige:
+    output:
+        'Meta/Input/{cohort_dir}.{chr}.{pheno}.sumstats.gz'
+    input:
+        sumstats='{cohort_dir}/Sumstats/{pheno}.saige.gz'
+    resources: mem_mb=12000
+    run:
+        import pandas as pd
+        import numpy as np
+
+        dfs = []
+        for chunk in pd.read_table(input.sumstats, chunksize=1E6):
+            chunk = chunk[chunk['CHR'].astype(str) == str(wildcards.chr)]
+            dfs.append(chunk)
+
+        df = pd.concat(dfs)
+
+        chr_col = 'CHR' if 'CHR' in df.columns else config['col_names']['CHROM']
+        bp_col = 'POS' if 'POS' in df.columns else config['col_names']['GENPOS']
+        a1_col = 'Allele2' if 'Allele2' in df.columns else config['col_names']['Allele2']
+        a2_col = 'Allele1' if 'Allele1' in df.columns else config['col_names']['Allele1']
+        snp_col = 'MarkerID' if 'MarkerID' in df.columns else config['col_names']['MarkerID']
+        beta_col = 'BETA' if 'BETA' in df.columns else config['col_names']['BETA']
+        se_col = 'SE' if 'SE' in df.columns else config['col_names']['SE']
+        p_col = 'p.value' if 'p.value' in df.columns else config['col_names']['p.value']
+
+        df = df.rename(columns={chr_col: 'CHR',
+                                bp_col: 'BP',
+                                a1_col: 'A1',
+                                a2_col: 'A2',
+                                snp_col: 'SNP',
+                                beta_col: 'BETA',
+                                se_col: 'SE',
+                                p_col: 'P'})
+
+        df = df[df['CHR'].astype(str) == str(wildcards.chr)]
+        print(df)
+
+        df = df.reset_index()
+
+        # df['BETA'] = np.log(df['OR'])
+        # df['SE'] = (np.log(df['U95']) - np.log(df['OR'])) / 1.96
+
+        keep_cols = ['SNP', 'BETA', 'SE', 'P', 'CHR', 'BP', 'A1', 'A2']
+        df = df.drop_duplicates(subset=['CHR', 'BP', 'A2'],keep=False)
+        df = df.drop_duplicates(subset=['SNP'],keep=False)
+        df[keep_cols].to_csv(str(output), sep=' ', index=False)
+
+rule make_meta_input_lifted_saige:
+    output:
+        'Meta/Input/{cohort_dir}_lifted.{chr}.{pheno}.sumstats.gz'
+    input:
+        sumstats='{cohort_dir}/Sumstats/{pheno}.liftover.tsv.gz'
+    resources: mem_mb=20000
+    run:
+        import pandas as pd
+        import numpy as np
+
+        df = pd.read_table(input.sumstats)
+
+        print(df)
+
+        chr_col = 'CHR' if 'CHR' in df.columns else config['col_names']['CHROM']
+        bp_col = 'POS' if 'POS' in df.columns else config['col_names']['GENPOS']
+        a1_col = 'Allele2' if 'Allele2' in df.columns else config['col_names']['Allele2']
+        a2_col = 'Allele1' if 'Allele1' in df.columns else config['col_names']['Allele1']
+        snp_col = 'MarkerID' if 'MarkerID' in df.columns else config['col_names']['MarkerID']
+        beta_col = 'BETA' if 'BETA' in df.columns else config['col_names']['BETA']
+        se_col = 'SE' if 'SE' in df.columns else config['col_names']['SE']
+        p_col = 'p.value' if 'p.value' in df.columns else config['col_names']['p.value']
+
+        df = df.rename(columns={chr_col: 'CHR',
+                                bp_col: 'BP',
+                                a1_col: 'A1',
+                                a2_col: 'A2',
+                                snp_col: 'SNP',
+                                beta_col: 'BETA',
+                                se_col: 'SE',
+                                p_col: 'P'})
+
+        df = df[df['CHR'].astype(str) == str(wildcards.chr)]
+        print(df)
+
+        df = df.reset_index()
+
+        # df['BETA'] = np.log(df['OR'])
+        # df['SE'] = (np.log(df['U95']) - np.log(df['OR'])) / 1.96
+
+        keep_cols = ['SNP', 'BETA', 'SE', 'P', 'CHR', 'BP', 'A1', 'A2']
+        df = df.drop_duplicates(subset=['CHR', 'BP', 'A2'], keep=False)
+        df = df.drop_duplicates(subset=['SNP'], keep=False)
+        df[keep_cols].to_csv(str(output), sep=' ', index=False)
