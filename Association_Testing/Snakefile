@@ -1,7 +1,7 @@
 
 rule all:
     input:
-        # expand('{dataset}/{dataset}_{ancestry}/sample_list.txt', dataset=['PMBB', 'UKBB', 'eMERGE'], ancestry=['EUR', 'AFR', 'ASIAN']),
+        expand('{dataset}/{dataset}_{ancestry}/sample_list.txt', dataset=['PMBB', 'UKBB', 'eMERGE'], ancestry=['EUR', 'AFR', 'ASIAN']),
         'all_sample_sizes.csv',
         '../Manuscript_Tables/table_1_datasets.csv'
 
