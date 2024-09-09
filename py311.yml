@@ -574,4 +574,3 @@ dependencies:
       - locuszoom-plot==0.1
       - snakemake-executor-plugin-slurm-jobstep==0.1.5
       - snakemake-interface-executor-plugins==7.0.3
-prefix: /home/guarelin/mambaforge/envs/py311
