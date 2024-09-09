@@ -1,8 +1,13 @@
+# Introduction
+
 This is the order of commands to replicate the analyses performed. 
 
 Any time I'm running `snakemake all`, the pertinent output files are listed under `rule all` in the respective `Snakefile` of that directory.
 
 Many of the `Snakefile`s have `include:` statements at the top. Source code for those dependency Snakemake pipelines can be found in `supplementary_snakemake_workflows`
+
+The exact python environment is described in `py11.yml`. To replicate this environment, do:
+- `mamba env create -f py311.yml`
 
 # Genotype Preparation
 ## `Locus_Extraction`
